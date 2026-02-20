@@ -42,6 +42,7 @@ void LogUsage(const char* argv0) {
             << "  -a    Use android RTP hack for older receivers\n"
             << "  -c <codec>  Video codec: vp8 (default), vp9\n"
             << "  -m <N>      Max bitrate (default: " << kDefaultMaxBitrate << ")\n"
+            << "  -w <id>     Capture window by X11 window ID (hex or decimal)\n"
             << "  -v    Verbose logging\n"
             << "  -h    Show this help\n";
 }
@@ -65,9 +66,10 @@ int X11CastMain(int argc, char* argv[]) {
   bool android_hack = false;
   int max_bitrate = kDefaultMaxBitrate;
   VideoCodec codec = VideoCodec::kVp8;
+  unsigned long window_id = 0;
 
   int opt;
-  while ((opt = getopt(argc, argv, "ac:m:vh")) != -1) {
+  while ((opt = getopt(argc, argv, "ac:m:w:vh")) != -1) {
     switch (opt) {
       case 'a': android_hack = true; break;
       case 'c':
@@ -80,6 +82,9 @@ int X11CastMain(int argc, char* argv[]) {
         break;
       case 'm':
         max_bitrate = atoi(optarg);
+        break;
+      case 'w':
+        window_id = strtoul(optarg, nullptr, 0);
         break;
       case 'v': verbose = true; break;
       case 'h': LogUsage(argv[0]); return 0;
@@ -138,7 +143,7 @@ int X11CastMain(int argc, char* argv[]) {
     settings.codec = codec;
     settings.enable_dscp = true;
 
-    agent->Connect(std::move(settings));
+    agent->Connect(std::move(settings), window_id);
   });
 
   task_runner->RunUntilSignaled();

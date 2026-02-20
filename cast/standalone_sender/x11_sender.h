@@ -24,11 +24,13 @@ class X11Sender {
  public:
   using ShutdownCallback = std::function<void()>;
 
+  // window_id: 0 = capture desktop, nonzero = capture that X11 window.
   X11Sender(Environment& environment,
             ConnectionSettings settings,
             const SenderSession* session,
             SenderSession::ConfiguredSenders senders,
-            ShutdownCallback shutdown_callback);
+            ShutdownCallback shutdown_callback,
+            unsigned long window_id = 0);
 
   ~X11Sender();
 
@@ -66,7 +68,7 @@ class X11Sender {
   Alarm congestion_alarm_;
   Alarm console_alarm_;
   Clock::time_point start_time_{};
-
+  unsigned long window_id_ = 0;
 };
 
 }  // namespace openscreen::cast

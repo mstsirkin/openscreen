@@ -27,7 +27,8 @@ X11Sender::X11Sender(Environment& environment,
                      ConnectionSettings settings,
                      const SenderSession* session,
                      SenderSession::ConfiguredSenders senders,
-                     ShutdownCallback shutdown_callback)
+                     ShutdownCallback shutdown_callback,
+                     unsigned long window_id)
     : env_(environment),
       settings_(std::move(settings)),
       session_(session),
@@ -41,19 +42,26 @@ X11Sender::X11Sender(Environment& environment,
           std::move(senders.video_sender))),
       congestion_alarm_(env_.now_function(), env_.task_runner()),
       console_alarm_(env_.now_function(), env_.task_runner()) {
-  OSP_LOG_INFO << "X11Sender: starting screen capture";
+  window_id_ = window_id;
+  OSP_LOG_INFO << "X11Sender: starting "
+               << (window_id_ ? "window" : "desktop") << " capture";
 
   bandwidth_being_utilized_ = settings_.max_bitrate / 2;
   UpdateEncoderBitrates();
 
   start_time_ = env_.now();
 
-  // Start video capturer (30 fps, desktop)
-  video_capturer_ = std::make_unique<X11Capturer>(
-      env_, 30,
-      [this](const X11Capturer::Frame& frame, Clock::time_point ref) {
-        OnVideoFrame(frame, ref);
-      });
+  auto video_cb = [this](const X11Capturer::Frame& frame,
+                         Clock::time_point ref) {
+    OnVideoFrame(frame, ref);
+  };
+  if (window_id_) {
+    video_capturer_ = std::make_unique<X11Capturer>(
+        env_, 30, window_id_, std::move(video_cb));
+  } else {
+    video_capturer_ = std::make_unique<X11Capturer>(
+        env_, 30, std::move(video_cb));
+  }
 
   // Start audio capturer (48kHz stereo)
   audio_capturer_ = std::make_unique<PulseCapturer>(

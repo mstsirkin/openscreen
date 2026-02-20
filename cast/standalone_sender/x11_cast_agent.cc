@@ -43,7 +43,8 @@ X11CastAgent::~X11CastAgent() {
   Shutdown();
 }
 
-void X11CastAgent::Connect(ConnectionSettings settings) {
+void X11CastAgent::Connect(ConnectionSettings settings, unsigned long window_id) {
+  window_id_ = window_id;
   connection_settings_ = std::move(settings);
   task_runner_.PostTask([this] {
     socket_factory_.Connect(connection_settings_->receiver_endpoint,
@@ -278,7 +279,8 @@ void X11CastAgent::StartX11Sender() {
   x11_sender_ = std::make_unique<X11Sender>(
       *environment_, connection_settings_.value(), current_session_.get(),
       std::move(*current_negotiation_),
-      [this]() { shutdown_callback_(); });
+      [this]() { shutdown_callback_(); },
+      window_id_);
   current_negotiation_.reset();
 }
 

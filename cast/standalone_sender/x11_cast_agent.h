@@ -48,7 +48,7 @@ class X11CastAgent final
                ShutdownCallback shutdown_callback);
   ~X11CastAgent();
 
-  void Connect(ConnectionSettings settings);
+  void Connect(ConnectionSettings settings, unsigned long window_id = 0);
 
  private:
   void OnConnected(SenderSocketFactory* factory,
@@ -107,6 +107,7 @@ class X11CastAgent final
   std::unique_ptr<X11Sender> x11_sender_;
   std::unique_ptr<SenderSession::ConfiguredSenders> current_negotiation_;
 
+  unsigned long window_id_ = 0;
   bool has_launched_ = false;
   bool shutting_down_ = false;
   int num_stats_updates_ = 0;
