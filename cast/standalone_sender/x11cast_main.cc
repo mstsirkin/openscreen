@@ -43,6 +43,7 @@ void LogUsage(const char* argv0) {
             << "  -c <codec>  Video codec: vp8 (default), vp9\n"
             << "  -m <N>      Max bitrate (default: " << kDefaultMaxBitrate << ")\n"
             << "  -w <id>     Capture window by X11 window ID (hex or decimal)\n"
+            << "  -W          Pick window by clicking on it\n"
             << "  -v    Verbose logging\n"
             << "  -h    Show this help\n";
 }
@@ -69,7 +70,7 @@ int X11CastMain(int argc, char* argv[]) {
   unsigned long window_id = 0;
 
   int opt;
-  while ((opt = getopt(argc, argv, "ac:m:w:vh")) != -1) {
+  while ((opt = getopt(argc, argv, "ac:m:w:Wvh")) != -1) {
     switch (opt) {
       case 'a': android_hack = true; break;
       case 'c':
@@ -86,6 +87,25 @@ int X11CastMain(int argc, char* argv[]) {
       case 'w':
         window_id = strtoul(optarg, nullptr, 0);
         break;
+      case 'W': {
+        std::cerr << "Click on a window to cast...\n";
+        FILE* fp = popen(
+            "xwininfo 2>/dev/null | sed -n 's/.*Window id: \\(0x[0-9a-f]*\\).*/\\1/p'",
+            "r");
+        if (fp) {
+          char buf[64];
+          if (fgets(buf, sizeof(buf), fp)) {
+            window_id = strtoul(buf, nullptr, 0);
+          }
+          pclose(fp);
+        }
+        if (!window_id) {
+          std::cerr << "No window selected.\n";
+          return 1;
+        }
+        std::cerr << "Selected window " << window_id << "\n";
+        break;
+      }
       case 'v': verbose = true; break;
       case 'h': LogUsage(argv[0]); return 0;
       default: LogUsage(argv[0]); return 1;
