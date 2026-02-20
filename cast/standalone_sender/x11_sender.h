@@ -67,8 +67,6 @@ class X11Sender {
   Alarm console_alarm_;
   Clock::time_point start_time_{};
 
-  // Back-pressure: skip capture frames when encoder is behind.
-  std::atomic<bool> frame_pending_{false};
 };
 
 }  // namespace openscreen::cast

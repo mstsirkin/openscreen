@@ -62,6 +62,7 @@ group("gn_all") {
     if (!build_with_chromium) {
       deps += [
         "cast/standalone_sender:cast_sender",
+        "cast/standalone_sender:x11cast",
         "osp:osp_demo",
         "third_party/protobuf:protoc($host_toolchain)",
         "third_party/zlib",

@@ -73,7 +73,6 @@ X11Sender::X11Sender(Environment& environment,
 X11Sender::~X11Sender() {
   congestion_alarm_.Cancel();
   console_alarm_.Cancel();
-  // Destroy capturers before encoders
   audio_capturer_.reset();
   video_capturer_.reset();
 }
