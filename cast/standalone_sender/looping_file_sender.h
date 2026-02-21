@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "cast/standalone_sender/connection_settings.h"
 #include "cast/standalone_sender/constants.h"
@@ -95,6 +96,15 @@ class LoopingFileSender final : public SimulatedAudioCapturer::Client,
 
   Alarm next_task_;
   Alarm console_update_task_;
+
+  // Padded 1920x1080 I420 frame for pillarboxing/letterboxing files
+  // with non-16:9 aspect ratios.
+  static constexpr int kDisplayWidth = 1920;
+  static constexpr int kDisplayHeight = 1080;
+  std::vector<uint8_t> padded_y_;
+  std::vector<uint8_t> padded_u_;
+  std::vector<uint8_t> padded_v_;
+  bool padded_initialized_ = false;
 };
 
 }  // namespace openscreen::cast

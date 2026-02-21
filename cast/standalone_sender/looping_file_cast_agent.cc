@@ -12,6 +12,7 @@
 #include "build/build_config.h"
 #include "cast/common/channel/message_util.h"
 #include "cast/common/public/cast_streaming_app_ids.h"
+#include "cast/standalone_sender/ffmpeg_glue.h"
 #include "cast/standalone_sender/looping_file_sender.h"
 #include "cast/streaming/public/capture_recommendations.h"
 #include "cast/streaming/public/constants.h"
@@ -303,7 +304,8 @@ void LoopingFileCastAgent::CreateAndStartSession() {
       // The video config is allowed to use whatever is left over after audio.
       .max_bit_rate =
           connection_settings_->max_bitrate - audio_config.bit_rate};
-  // Use default display resolution of 1080P.
+  // Always use 1920x1080 for the display. Files with different aspect
+  // ratios will be pillarboxed/letterboxed to fit.
   video_config.resolutions.emplace_back(Resolution{1920, 1080});
 
   OSP_VLOG << "Starting session negotiation.";

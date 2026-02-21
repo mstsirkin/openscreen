@@ -139,23 +139,100 @@ void LoopingFileSender::OnVideoFrame(const AVFrame& av_frame,
   TRACE_SCOPED1(TraceCategory::kStandaloneSender, "OnVideoFrame",
                 "reference_time", ToString(reference_time));
   latest_frame_time_ = std::max(reference_time, latest_frame_time_);
+
+  const int src_w = av_frame.width - av_frame.crop_left - av_frame.crop_right;
+  const int src_h = av_frame.height - av_frame.crop_top - av_frame.crop_bottom;
+  const uint8_t* src_y = av_frame.data[0] + av_frame.crop_left +
+                          av_frame.linesize[0] * av_frame.crop_top;
+  const uint8_t* src_u = av_frame.data[1] + av_frame.crop_left / 2 +
+                          av_frame.linesize[1] * av_frame.crop_top / 2;
+  const uint8_t* src_v = av_frame.data[2] + av_frame.crop_left / 2 +
+                          av_frame.linesize[2] * av_frame.crop_top / 2;
+
   StreamingVideoEncoder::VideoFrame frame{};
-  frame.width = av_frame.width - av_frame.crop_left - av_frame.crop_right;
-  frame.height = av_frame.height - av_frame.crop_top - av_frame.crop_bottom;
-  frame.yuv_planes[0] = av_frame.data[0] + av_frame.crop_left +
-                        av_frame.linesize[0] * av_frame.crop_top;
-  frame.yuv_planes[1] = av_frame.data[1] + av_frame.crop_left / 2 +
-                        av_frame.linesize[1] * av_frame.crop_top / 2;
-  frame.yuv_planes[2] = av_frame.data[2] + av_frame.crop_left / 2 +
-                        av_frame.linesize[2] * av_frame.crop_top / 2;
-  for (int i = 0; i < 3; ++i) {
-    frame.yuv_strides[i] = av_frame.linesize[i];
-  }
   frame.capture_begin_time = capture_begin_time;
   frame.capture_end_time = capture_end_time;
 
-  // TODO(jophba): Add performance metrics visual overlay (based on Stats
-  // callback).
+  if (src_w == kDisplayWidth && src_h == kDisplayHeight) {
+    // No padding needed -- pass through directly.
+    frame.width = src_w;
+    frame.height = src_h;
+    frame.yuv_planes[0] = src_y;
+    frame.yuv_planes[1] = src_u;
+    frame.yuv_planes[2] = src_v;
+    for (int i = 0; i < 3; ++i)
+      frame.yuv_strides[i] = av_frame.linesize[i];
+  } else {
+    // Pad/letterbox to kDisplayWidth x kDisplayHeight.
+    if (!padded_initialized_) {
+      padded_y_.assign(kDisplayWidth * kDisplayHeight, 16);   // black Y
+      padded_u_.assign(kDisplayWidth / 2 * kDisplayHeight / 2, 128);
+      padded_v_.assign(kDisplayWidth / 2 * kDisplayHeight / 2, 128);
+      padded_initialized_ = true;
+    }
+
+    // Scale to fit while preserving aspect ratio.
+    int dst_w, dst_h;
+    if (src_w * kDisplayHeight > src_h * kDisplayWidth) {
+      // Wider than display -- letterbox (bars top/bottom)
+      dst_w = kDisplayWidth;
+      dst_h = src_h * kDisplayWidth / src_w;
+    } else {
+      // Taller than display -- pillarbox (bars left/right)
+      dst_h = kDisplayHeight;
+      dst_w = src_w * kDisplayHeight / src_h;
+    }
+    dst_w &= ~1;
+    dst_h &= ~1;
+
+    const int x_off = (kDisplayWidth - dst_w) / 2;
+    const int y_off = (kDisplayHeight - dst_h) / 2;
+
+    // Clear the padded frame to black.
+    std::memset(padded_y_.data(), 16, padded_y_.size());
+    std::memset(padded_u_.data(), 128, padded_u_.size());
+    std::memset(padded_v_.data(), 128, padded_v_.size());
+
+    // Copy source into center of padded frame (no scaling, just center).
+    // If src matches dst dimensions, this is a direct copy.
+    // For simplicity, we don't scale -- we center-crop/pad.
+    const int copy_w = std::min(src_w, dst_w);
+    const int copy_h = std::min(src_h, dst_h);
+    const int src_x = (src_w - copy_w) / 2;
+    const int src_y_off = (src_h - copy_h) / 2;
+
+    // Y plane
+    for (int row = 0; row < copy_h; ++row) {
+      std::memcpy(
+          padded_y_.data() + (y_off + row) * kDisplayWidth + x_off,
+          src_y + (src_y_off + row) * av_frame.linesize[0] + src_x,
+          copy_w);
+    }
+    // U plane
+    for (int row = 0; row < copy_h / 2; ++row) {
+      std::memcpy(
+          padded_u_.data() + (y_off / 2 + row) * (kDisplayWidth / 2) + x_off / 2,
+          src_u + (src_y_off / 2 + row) * av_frame.linesize[1] + src_x / 2,
+          copy_w / 2);
+    }
+    // V plane
+    for (int row = 0; row < copy_h / 2; ++row) {
+      std::memcpy(
+          padded_v_.data() + (y_off / 2 + row) * (kDisplayWidth / 2) + x_off / 2,
+          src_v + (src_y_off / 2 + row) * av_frame.linesize[2] + src_x / 2,
+          copy_w / 2);
+    }
+
+    frame.width = kDisplayWidth;
+    frame.height = kDisplayHeight;
+    frame.yuv_planes[0] = padded_y_.data();
+    frame.yuv_planes[1] = padded_u_.data();
+    frame.yuv_planes[2] = padded_v_.data();
+    frame.yuv_strides[0] = kDisplayWidth;
+    frame.yuv_strides[1] = kDisplayWidth / 2;
+    frame.yuv_strides[2] = kDisplayWidth / 2;
+  }
+
   video_encoder_->EncodeAndSend(frame, reference_time, {});
 }
 
