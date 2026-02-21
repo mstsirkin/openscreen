@@ -23,8 +23,9 @@ void ForAllQueriers(
     std::function<void(DnsSdQuerier*)> action) {
   for (auto& service_instance : *service_instances) {
     auto* querier = service_instance->GetQuerier();
-    OSP_CHECK(querier);
-
+    if (!querier) {
+      continue;
+    }
     action(querier);
   }
 }
@@ -36,8 +37,9 @@ Error ForAllPublishers(
   Error result = Error::None();
   for (auto& service_instance : *service_instances) {
     auto* publisher = service_instance->GetPublisher();
-    OSP_CHECK(publisher);
-
+    if (!publisher) {
+      continue;
+    }
     TRACE_SCOPED(TraceCategory::kDiscovery, operation);
     Error inner_result = action(publisher);
     TRACE_SET_RESULT(inner_result);

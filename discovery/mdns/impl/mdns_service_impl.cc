@@ -33,6 +33,7 @@ MdnsServiceImpl::MdnsServiceImpl(TaskRunner& task_runner,
     : task_runner_(task_runner),
       now_function_(now_function),
       reporting_client_(reporting_client),
+      ignore_bad_interfaces_(config.ignore_bad_interfaces),
       receiver_(config),
       interface_(network_info.index) {
   // Create all UDP sockets needed for this object. They should not yet be bound
@@ -65,7 +66,15 @@ MdnsServiceImpl::MdnsServiceImpl(TaskRunner& task_runner,
   // Initialize objects which depend on the above sockets.
   UdpSocket* socket_ptr =
       socket_v4_.get() ? socket_v4_.get() : socket_v6_.get();
-  OSP_CHECK(socket_ptr);
+  if (!socket_ptr) {
+    if (config.ignore_bad_interfaces) {
+      OSP_LOG_INFO << "Skipping interface " << network_info.name
+                   << " (no usable address)";
+      return;
+    }
+    OSP_CHECK(socket_ptr) << "No usable socket for mDNS on interface "
+                          << network_info.name;
+  }
   sender_ = std::make_unique<MdnsSender>(*socket_ptr);
   if (config.enable_querying) {
     querier_ = std::make_unique<MdnsQuerier>(*sender_, receiver_, task_runner_,
@@ -102,18 +111,24 @@ void MdnsServiceImpl::StartQuery(const DomainName& name,
                                  DnsType dns_type,
                                  DnsClass dns_class,
                                  MdnsRecordChangedCallback* callback) {
-  return querier_->StartQuery(name, dns_type, dns_class, callback);
+  if (querier_) {
+    querier_->StartQuery(name, dns_type, dns_class, callback);
+  }
 }
 
 void MdnsServiceImpl::StopQuery(const DomainName& name,
                                 DnsType dns_type,
                                 DnsClass dns_class,
                                 MdnsRecordChangedCallback* callback) {
-  return querier_->StopQuery(name, dns_type, dns_class, callback);
+  if (querier_) {
+    querier_->StopQuery(name, dns_type, dns_class, callback);
+  }
 }
 
 void MdnsServiceImpl::ReinitializeQueries(const DomainName& name) {
-  querier_->ReinitializeQueries(name);
+  if (querier_) {
+    querier_->ReinitializeQueries(name);
+  }
 }
 
 Error MdnsServiceImpl::StartProbe(MdnsDomainConfirmedProvider* callback,
@@ -137,6 +152,10 @@ Error MdnsServiceImpl::UnregisterRecord(const MdnsRecord& record) {
 }
 
 void MdnsServiceImpl::OnError(UdpSocket* socket, const Error& error) {
+  if (ignore_bad_interfaces_) {
+    OSP_LOG_INFO << "mDNS socket error (ignored): " << error;
+    return;
+  }
   reporting_client_.OnFatalError(error);
 }
 

@@ -18,9 +18,16 @@ namespace openscreen::cast {
 ReceiverChooser::ReceiverChooser(const InterfaceInfo& interface,
                                  TaskRunner& task_runner,
                                  ResultCallback result_callback)
+    : ReceiverChooser(std::vector<InterfaceInfo>{interface},
+                      task_runner, std::move(result_callback)) {}
+
+ReceiverChooser::ReceiverChooser(std::vector<InterfaceInfo> interfaces,
+                                 TaskRunner& task_runner,
+                                 ResultCallback result_callback)
     : result_callback_(std::move(result_callback)),
       menu_alarm_(&Clock::now, task_runner) {
-  discovery::Config config{.network_info = {interface},
+  discovery::Config config{.network_info = std::move(interfaces),
+                           .ignore_bad_interfaces = true,
                            .enable_publication = false,
                            .enable_querying = true};
   service_ =

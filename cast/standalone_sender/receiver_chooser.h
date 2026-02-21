@@ -32,6 +32,10 @@ class ReceiverChooser final : public discovery::ReportingClient {
                   TaskRunner& task_runner,
                   ResultCallback result_callback);
 
+  ReceiverChooser(std::vector<InterfaceInfo> interfaces,
+                  TaskRunner& task_runner,
+                  ResultCallback result_callback);
+
   ~ReceiverChooser() final;
 
  private:

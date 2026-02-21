@@ -36,7 +36,7 @@ namespace openscreen::cast {
 namespace {
 
 void LogUsage(const char* argv0) {
-  std::cerr << "Usage: " << argv0 << " [options] <interface_or_ip[:port]>\n"
+  std::cerr << "Usage: " << argv0 << " [options] [interface_or_ip[:port]]\n"
             << "\n"
             << "Options:\n"
             << "  -a    Use android RTP hack for older receivers\n"
@@ -112,11 +112,7 @@ int X11CastMain(int argc, char* argv[]) {
     }
   }
 
-  if (optind >= argc) {
-    LogUsage(argv[0]);
-    return 1;
-  }
-  const char* target = argv[optind];
+  const char* target = (optind < argc) ? argv[optind] : nullptr;
 
   SetLogLevel(verbose ? LogLevel::kVerbose : LogLevel::kInfo);
 
@@ -125,24 +121,31 @@ int X11CastMain(int argc, char* argv[]) {
   PlatformClientPosix::Create(milliseconds(50),
                               std::unique_ptr<TaskRunnerImpl>(task_runner));
 
-  IPEndpoint remote_endpoint = ParseAsEndpoint(target);
+  IPEndpoint remote_endpoint{};
+  if (target) {
+    remote_endpoint = ParseAsEndpoint(target);
+  }
   if (!remote_endpoint.port) {
-    // Discovery mode
+    // Discovery mode: scan the specified interface, or all interfaces
+    // simultaneously.
+    std::vector<InterfaceInfo> scan_ifaces;
     for (const InterfaceInfo& iface : GetNetworkInterfaces()) {
-      if (iface.name == target) {
-        ReceiverChooser chooser(iface, *task_runner,
-                                [&](IPEndpoint ep) {
-                                  remote_endpoint = ep;
-                                  task_runner->RequestStopSoon();
-                                });
-        task_runner->RunUntilSignaled();
-        break;
+      if (target && iface.name != target) {
+        continue;
       }
+      scan_ifaces.push_back(iface);
+    }
+    if (!scan_ifaces.empty()) {
+      ReceiverChooser chooser(std::move(scan_ifaces), *task_runner,
+                              [&](IPEndpoint ep) {
+                                remote_endpoint = ep;
+                                task_runner->RequestStopSoon();
+                              });
+      task_runner->RunUntilSignaled();
     }
 
     if (!remote_endpoint.port) {
-      std::cerr << "No Cast Receiver chosen. Cannot continue.\n";
-      LogUsage(argv[0]);
+      std::cerr << "No Cast Receiver found.\n";
       return 2;
     }
   }

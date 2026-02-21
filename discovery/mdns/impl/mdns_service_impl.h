@@ -72,6 +72,7 @@ class MdnsServiceImpl : public MdnsService, public UdpSocket::Client {
   TaskRunner& task_runner_;
   ClockNowFunctionPtr now_function_;
   ReportingClient& reporting_client_;
+  bool ignore_bad_interfaces_ = false;
 
   MdnsRandom random_delay_;
   MdnsReceiver receiver_;

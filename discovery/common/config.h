@@ -21,6 +21,10 @@ struct Config {
   // should listen for announced service instances.
   std::vector<InterfaceInfo> network_info;
 
+  // When true, interfaces that fail socket creation (e.g., no IP address)
+  // are silently skipped instead of causing a fatal error.
+  bool ignore_bad_interfaces = false;
+
   // Maximum allowed size in bytes for the rdata in an incoming record. All
   // received records with rdata size exceeding this size will be dropped.
   // The default value is taken from RFC 6763 section 6.2.
