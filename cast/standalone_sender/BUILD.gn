@@ -167,5 +167,13 @@ if (!build_with_chromium) {
       configs = [ "../common:certificate_config" ]
       public_configs = [ ":standalone_external_libs" ]
     }
+
+    copy("x11cast_py") {
+      testonly = true
+      visibility += [ "../..:gn_all" ]
+      sources = [ "x11cast.py" ]
+      outputs = [ "$root_out_dir/x11cast.py" ]
+      deps = [ ":x11cast" ]
+    }
   }
 }
