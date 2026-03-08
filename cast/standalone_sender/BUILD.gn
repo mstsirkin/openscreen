@@ -175,5 +175,13 @@ if (!build_with_chromium) {
       outputs = [ "$root_out_dir/x11cast.py" ]
       deps = [ ":x11cast" ]
     }
+
+    copy("x11castapp_py") {
+      testonly = true
+      visibility += [ "../..:gn_all" ]
+      sources = [ "x11castapp.py" ]
+      outputs = [ "$root_out_dir/x11castapp.py" ]
+      deps = [ ":x11cast" ]
+    }
   }
 }
