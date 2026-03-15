@@ -91,6 +91,13 @@ class MainActivity : ComponentActivity() {
         val testTarget = intent?.getStringExtra("test_target")
         val testFile = intent?.getStringExtra("test_file")
         val testCalibrate = intent?.getBooleanExtra("test_calibrate", false) == true
+        // Handle shared video from Gallery or other apps
+        val sharedUri = when (intent?.action) {
+            android.content.Intent.ACTION_SEND ->
+                intent.getParcelableExtra<Uri>(android.content.Intent.EXTRA_STREAM)
+            android.content.Intent.ACTION_VIEW -> intent.data
+            else -> null
+        }
         enableEdgeToEdge()
         setContent {
             MaterialTheme {
@@ -98,7 +105,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = Color(0xFF101317),
                 ) {
-                    ControlCastApp(testTarget, testFile, testCalibrate)
+                    ControlCastApp(testTarget, testFile, testCalibrate, sharedUri)
                 }
             }
         }
@@ -293,7 +300,7 @@ private fun setAutoReconnect(context: Context, target: String, enabled: Boolean)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ControlCastApp(testTarget: String? = null, testFile: String? = null, testCalibrate: Boolean = false) {
+private fun ControlCastApp(testTarget: String? = null, testFile: String? = null, testCalibrate: Boolean = false, sharedUri: Uri? = null) {
     val context = LocalContext.current
     val backend = remember { NativeBackedBackend() }
 
@@ -361,6 +368,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var sliderValue by remember { mutableFloatStateOf(0f) }
     var sliderDragging by remember { mutableStateOf(false) }
     var connectedDevice by rememberSaveable { mutableStateOf<String?>(null) }
+    var isFullscreen by remember { mutableStateOf(false) }
     var autoReconnectTargets by remember {
         mutableStateOf(getAutoReconnectTargets(context))
     }
@@ -385,6 +393,18 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     DisposableEffect(discovery) {
         discovery.startDiscovery()
         onDispose { discovery.stopDiscovery() }
+    }
+
+    // Auto-load video shared from Gallery or other apps
+    LaunchedEffect(sharedUri) {
+        if (sharedUri != null) {
+            selectedUri = sharedUri
+            val mediaItem = MediaItem.fromUri(sharedUri)
+            exoPlayer.setMediaItem(mediaItem)
+            exoPlayer.prepare()
+            if (localMirrorEnabled) exoPlayer.play()
+            backend.openVideo(context, sharedUri, localMirrorEnabled)
+        }
     }
 
     // Auto-reconnect: when a device marked for auto-reconnect appears
@@ -435,6 +455,28 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             }
             backend.openVideo(context, uri, localMirrorEnabled)
         }
+    }
+
+    if (isFullscreen) {
+        FullscreenPlayer(
+            exoPlayer = exoPlayer,
+            viewport = viewport,
+            onViewportChange = { viewport = it; backend.updateViewport(it) },
+            isPlaying = isPlaying,
+            onPlayPause = {
+                if (isPlaying) { exoPlayer.pause(); backend.pause() }
+                else { exoPlayer.play(); backend.play() }
+                isPlaying = !isPlaying
+            },
+            sliderValue = sliderValue,
+            onSliderChange = { sliderDragging = true; sliderValue = it; positionMs = (durationMs * it).toLong() },
+            onSliderFinished = { sliderDragging = false; exoPlayer.seekTo(positionMs); backend.seekTo(positionMs) },
+            sliderEnabled = durationMs > 0L,
+            positionMs = positionMs,
+            durationMs = durationMs,
+            onExitFullscreen = { isFullscreen = false },
+        )
+        return
     }
 
     Column(
@@ -680,6 +722,19 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                     },
                     update = { it.player = exoPlayer },
                 )
+                // Fullscreen button overlay
+                Button(
+                    onClick = { isFullscreen = true },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                        .size(36.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                        containerColor = Color.Black.copy(alpha = 0.5f)),
+                ) {
+                    Text("[ ]", color = Color.White, fontSize = 12.sp)
+                }
             }
         } else {
             Box(
@@ -802,6 +857,91 @@ private fun SettingsRow(
             enabled = !calibrating,
         ) {
             Text(if (calibrating) "..." else "Cal")
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FullscreenPlayer(
+    exoPlayer: ExoPlayer,
+    viewport: ViewportState,
+    onViewportChange: (ViewportState) -> Unit,
+    isPlaying: Boolean,
+    onPlayPause: () -> Unit,
+    sliderValue: Float,
+    onSliderChange: (Float) -> Unit,
+    onSliderFinished: () -> Unit,
+    sliderEnabled: Boolean,
+    positionMs: Long,
+    durationMs: Long,
+    onExitFullscreen: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .pointerInput(Unit) {
+                detectTransformGestures { _, pan, zoom, _ ->
+                    val newZoom = (viewport.zoom * zoom).coerceIn(1f, 8f)
+                    val zoomRatio = if (newZoom == 0f) 1f else newZoom / viewport.zoom
+                    onViewportChange(viewport.copy(
+                        zoom = newZoom,
+                        offsetX = (viewport.offsetX + pan.x * zoomRatio).coerceIn(-2000f, 2000f),
+                        offsetY = (viewport.offsetY + pan.y * zoomRatio).coerceIn(-2000f, 2000f),
+                    ))
+                }
+            },
+    ) {
+        AndroidView(
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = viewport.zoom
+                    scaleY = viewport.zoom
+                    translationX = viewport.offsetX
+                    translationY = viewport.offsetY
+                },
+            factory = { ctx ->
+                PlayerView(ctx).apply {
+                    player = exoPlayer
+                    useController = false
+                    layoutParams = android.view.ViewGroup.LayoutParams(MATCH_PARENT, MATCH_PARENT)
+                }
+            },
+            update = { it.player = exoPlayer },
+        )
+        // Overlay controls
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.Bottom,
+        ) {
+            Slider(
+                value = sliderValue,
+                onValueChange = onSliderChange,
+                onValueChangeFinished = onSliderFinished,
+                enabled = sliderEnabled,
+                colors = androidx.compose.material3.SliderDefaults.colors(
+                    thumbColor = Color.White,
+                    activeTrackColor = Color.White,
+                ),
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(formatTime(positionMs), color = Color.White)
+                Button(onClick = onPlayPause) {
+                    Text(if (isPlaying) "Pause" else "Play")
+                }
+                Button(onClick = onExitFullscreen) {
+                    Text("Exit")
+                }
+                Text(formatTime(durationMs), color = Color.White)
+            }
         }
     }
 }
