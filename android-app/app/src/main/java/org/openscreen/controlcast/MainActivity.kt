@@ -306,11 +306,21 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             backend.testCast(testTarget, testFile)
         }
         if (testCalibrate && activity != null) {
+            // Extract and cast bundled sync test if no file specified
+            if (testFile.isNullOrEmpty() && !testTarget.isNullOrEmpty()) {
+                val syncFile = java.io.File(context.cacheDir, "sync_test.mp4")
+                if (!syncFile.exists()) {
+                    context.resources.openRawResource(R.raw.sync_test).use { input ->
+                        syncFile.outputStream().use { output -> input.copyTo(output) }
+                    }
+                }
+                delay(1000)
+                backend.testCast(testTarget, syncFile.absolutePath)
+            }
             val calibrator = AvSyncCalibrator(context)
             if (!calibrator.hasPermissions()) {
                 activity.requestCalibrationPermissions()
             }
-            // Wait for permissions + cast to start
             delay(5000)
             if (AvSyncCalibrator(context).hasPermissions()) {
                 android.util.Log.i("ControlCast", "Starting calibration...")
@@ -579,7 +589,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                     backend.setHwEncode(it)
                 },
             )
-            Text("HW encode", color = Color(0xFFD9E2EC))
+            Text("HW enc", color = Color(0xFFD9E2EC))
         }
 
         Row(
@@ -637,9 +647,17 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                         return@Button
                     }
                     calibrating = true
-                    backend.testCast(
-                        connectedDevice?.let { discoveredDevices.firstOrNull { d -> d.name == it }?.target } ?: "",
-                        "/data/local/tmp/sync_test.mp4")
+                    // Extract bundled sync test video to cache
+                    val syncFile = java.io.File(context.cacheDir, "sync_test.mp4")
+                    if (!syncFile.exists()) {
+                        context.resources.openRawResource(R.raw.sync_test).use { input ->
+                            syncFile.outputStream().use { output -> input.copyTo(output) }
+                        }
+                    }
+                    val target = connectedDevice?.let {
+                        discoveredDevices.firstOrNull { d -> d.name == it }?.target
+                    } ?: ""
+                    backend.testCast(target, syncFile.absolutePath)
                     coroutineScope.launch {
                         delay(3000)
                         val result = calibrator.calibrate(activity)
