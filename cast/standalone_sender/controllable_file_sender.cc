@@ -86,7 +86,13 @@ void ControllableFileSender::Pause() {
     return;
   }
   last_known_position_ = GetCurrentPosition();
-  StopCapturers();
+  // Stop alarms and mark as paused, but keep capturers alive
+  // so SeekTo can reuse them for preview frames.
+  next_task_.Cancel();
+  console_update_task_.Cancel();
+  if (video_capturer_.has_value()) video_capturer_->SetPlaybackRate(0);
+  if (audio_capturer_.has_value()) audio_capturer_->SetPlaybackRate(0);
+  is_playing_ = false;
 }
 
 void ControllableFileSender::Stop() {
@@ -95,12 +101,29 @@ void ControllableFileSender::Stop() {
 }
 
 void ControllableFileSender::SeekTo(Clock::duration position) {
-  bool was_playing = is_playing_;
   last_known_position_ = ClampPosition(position);
-  if (was_playing) {
+  if (is_playing_) {
     StartPlaybackAt(last_known_position_);
+  } else if (video_capturer_.has_value()) {
+    // Seek existing capturers while paused — produces frames at
+    // the new position so the TV shows a preview, then re-pauses.
+    auto ref = env_.now() + settings_.playout_delay;
+    video_capturer_->SeekTo(last_known_position_, ref);
+    if (audio_capturer_.has_value()) {
+      audio_capturer_->SeekTo(last_known_position_, ref);
+    }
+    // Re-pause after a few frames so we don't keep playing
+    next_task_.ScheduleFromNow([this] {
+      if (!is_playing_ && video_capturer_.has_value()) {
+        video_capturer_->SetPlaybackRate(0);
+      }
+      if (!is_playing_ && audio_capturer_.has_value()) {
+        audio_capturer_->SetPlaybackRate(0);
+      }
+    }, milliseconds(200));
   }
 }
+
 
 void ControllableFileSender::SeekBy(Clock::duration delta) {
   SeekTo(GetCurrentPosition() + delta);

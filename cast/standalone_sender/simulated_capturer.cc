@@ -117,6 +117,31 @@ void SimulatedCapturer::SetPlaybackRate(double rate) {
   }
 }
 
+void SimulatedCapturer::SeekTo(Clock::duration media_time,
+                               Clock::time_point new_start_time) {
+  if (!format_context_ || stream_index_ < 0) return;
+
+  next_task_.Cancel();
+
+  const AVRational time_base =
+      format_context_->streams[stream_index_]->time_base;
+  const int64_t seek_target = av_rescale_q(
+      media_time.count(),
+      AVRational{Clock::duration::period::num, Clock::duration::period::den},
+      time_base);
+  av_seek_frame(format_context_.get(), stream_index_, seek_target,
+                AVSEEK_FLAG_BACKWARD);
+  avcodec_flush_buffers(decoder_context_.get());
+
+  start_time_ = new_start_time;
+  start_media_time_ = media_time;
+  last_frame_timestamp_.reset();
+  capture_begin_time_ = {};
+
+  next_task_.Schedule([this] { StartDecodingNextFrame(); },
+                      Alarm::kImmediately);
+}
+
 void SimulatedCapturer::SetAdditionalDecoderParameters(
     AVCodecContext* decoder_context) {}
 

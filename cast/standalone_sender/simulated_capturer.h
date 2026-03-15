@@ -41,6 +41,7 @@ class SimulatedCapturer {
   };
 
   void SetPlaybackRate(double rate);
+  void SeekTo(Clock::duration media_time, Clock::time_point new_start_time);
 
  protected:
   SimulatedCapturer(Environment& environment,
@@ -95,8 +96,8 @@ class SimulatedCapturer {
   const AVFormatContextUniquePtr format_context_;
   ClockNowFunctionPtr now_;
   const AVMediaType media_type_;  // Audio or Video.
-  const Clock::time_point start_time_;
-  const Clock::duration start_media_time_;
+  Clock::time_point start_time_;
+  Clock::duration start_media_time_;
   Observer& observer_;
   const AVPacketUniquePtr packet_;        // Decoder input buffer.
   const AVFrameUniquePtr decoded_frame_;  // Decoder output frame.
