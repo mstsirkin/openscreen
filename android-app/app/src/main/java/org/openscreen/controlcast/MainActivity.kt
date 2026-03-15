@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -368,7 +369,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var sliderValue by remember { mutableFloatStateOf(0f) }
     var sliderDragging by remember { mutableStateOf(false) }
     var connectedDevice by rememberSaveable { mutableStateOf<String?>(null) }
-    var isFullscreen by remember { mutableStateOf(false) }
+    var isFullscreen by rememberSaveable { mutableStateOf(false) }
     var autoReconnectTargets by remember {
         mutableStateOf(getAutoReconnectTargets(context))
     }
@@ -464,9 +465,11 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             onViewportChange = { viewport = it; backend.updateViewport(it) },
             isPlaying = isPlaying,
             onPlayPause = {
-                if (isPlaying) { exoPlayer.pause(); backend.pause() }
-                else { exoPlayer.play(); backend.play() }
-                isPlaying = !isPlaying
+                try {
+                    if (isPlaying) { exoPlayer.pause(); backend.pause() }
+                    else { exoPlayer.play(); backend.play() }
+                    isPlaying = !isPlaying
+                } catch (_: Exception) {}
             },
             sliderValue = sliderValue,
             onSliderChange = { sliderDragging = true; sliderValue = it; positionMs = (durationMs * it).toLong() },
@@ -911,12 +914,14 @@ private fun FullscreenPlayer(
             },
             update = { it.player = exoPlayer },
         )
-        // Overlay controls
+        // Overlay controls at bottom, above navigation bar
         Column(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.Bottom,
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(Color.Black.copy(alpha = 0.5f))
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
             Slider(
                 value = sliderValue,
