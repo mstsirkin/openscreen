@@ -5,9 +5,11 @@
 #ifndef CAST_STANDALONE_SENDER_CONNECTION_SETTINGS_H_
 #define CAST_STANDALONE_SENDER_CONNECTION_SETTINGS_H_
 
+#include <chrono>
 #include <string>
 
 #include "cast/streaming/public/constants.h"
+#include "platform/api/time.h"
 #include "platform/base/interface_info.h"
 
 namespace openscreen::cast {
@@ -49,6 +51,13 @@ struct ConnectionSettings {
 
   // PulseAudio source to capture audio from. Empty means default sink monitor.
   std::string pulse_source;
+
+  // Audio-video sync offset: shifts audio reference_time earlier by this
+  // amount to compensate for the receiver's audio/video render latency
+  // difference. Positive = audio plays earlier. Measured empirically
+  // using a sync test (simultaneous beep + flash). Default 30ms works
+  // for most Cast receivers (Google TV).
+  Clock::duration av_sync_offset = std::chrono::milliseconds(30);
 };
 
 }  // namespace openscreen::cast
