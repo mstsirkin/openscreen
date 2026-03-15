@@ -58,6 +58,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -602,7 +603,29 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             ) {
                 Text("Reset View")
             }
-            Spacer(modifier = Modifier.width(12.dp))
+        }
+
+        // A/V sync offset
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("A/V sync:", color = Color(0xFFD9E2EC))
+            var offsetText by rememberSaveable { mutableStateOf("30") }
+            androidx.compose.material3.OutlinedTextField(
+                value = offsetText,
+                onValueChange = { new ->
+                    offsetText = new.filter { it.isDigit() || it == '-' }
+                    offsetText.toLongOrNull()?.let { backend.setAvSyncOffset(it) }
+                },
+                modifier = Modifier.width(80.dp),
+                textStyle = androidx.compose.ui.text.TextStyle(
+                    color = Color(0xFFD9E2EC),
+                    fontSize = 14.sp,
+                ),
+                singleLine = true,
+                suffix = { Text("ms", color = Color(0xFF6B7F8E)) },
+            )
             val activity = context as? MainActivity
             var calibrating by remember { mutableStateOf(false) }
             Button(
@@ -613,17 +636,17 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                         activity.requestCalibrationPermissions()
                         return@Button
                     }
-                    // Cast the sync test pattern, then calibrate
                     calibrating = true
                     backend.testCast(
                         connectedDevice?.let { discoveredDevices.firstOrNull { d -> d.name == it }?.target } ?: "",
                         "/data/local/tmp/sync_test.mp4")
                     coroutineScope.launch {
-                        delay(3000)  // Wait for cast to start
+                        delay(3000)
                         val result = calibrator.calibrate(activity)
                         calibrating = false
                         Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
                         if (result.numSamples > 0) {
+                            offsetText = result.offsetMs.toString()
                             backend.setAvSyncOffset(result.offsetMs)
                         }
                     }
