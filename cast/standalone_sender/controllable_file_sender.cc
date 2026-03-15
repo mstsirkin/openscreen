@@ -113,6 +113,10 @@ void ControllableFileSender::ResetViewport() {
   viewport_ = VideoViewport{};
 }
 
+void ControllableFileSender::SetAvSyncOffset(Clock::duration offset) {
+  settings_.av_sync_offset = offset;
+}
+
 Clock::duration ControllableFileSender::GetCurrentPosition() const {
   if (!is_playing_) {
     return last_known_position_;

@@ -517,9 +517,19 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeSetAvSyncOffset(
     jobject thiz,
     jlong offset_ms) {
   auto& state = State();
-  std::lock_guard<std::mutex> lock(state.mutex);
-  state.av_sync_offset_ms = offset_ms;
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.av_sync_offset_ms = offset_ms;
+  }
   LOGI("A/V sync offset set to %lld ms", (long long)offset_ms);
+#ifdef HAVE_OPENSCREEN
+  if (state.agent && state.task_runner) {
+    auto dur = std::chrono::milliseconds(offset_ms);
+    state.task_runner->PostTask([&state, dur]() {
+      if (state.agent) state.agent->SetAvSyncOffset(dur);
+    });
+  }
+#endif
 }
 
 extern "C" JNIEXPORT jstring JNICALL

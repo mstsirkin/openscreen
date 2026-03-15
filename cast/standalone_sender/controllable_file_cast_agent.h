@@ -52,6 +52,7 @@ class ControllableFileCastAgent final
   void SeekBy(Clock::duration delta);
   void SetViewport(const VideoViewport& viewport);
   void ResetViewport();
+  void SetAvSyncOffset(Clock::duration offset);
 
  private:
   void OnConnected(SenderSocketFactory* factory,

@@ -49,6 +49,7 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
 
   void SetViewport(const VideoViewport& viewport);
   void ResetViewport();
+  void SetAvSyncOffset(Clock::duration offset);
 
   Clock::duration GetCurrentPosition() const;
   Clock::duration GetDuration() const;
@@ -89,7 +90,7 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
   void ApplyViewportTransform(StreamingVideoEncoder::VideoFrame* frame);
 
   Environment& env_;
-  const ConnectionSettings settings_;
+  ConnectionSettings settings_;
   const SenderSession* session_;
   ShutdownCallback shutdown_callback_;
 

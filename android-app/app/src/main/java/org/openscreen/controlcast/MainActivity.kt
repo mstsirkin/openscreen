@@ -651,7 +651,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                         }
                     }
                 },
-                enabled = !calibrating && connectedDevice != null,
+                enabled = !calibrating,
             ) {
                 Text(if (calibrating) "..." else "Calibrate")
             }

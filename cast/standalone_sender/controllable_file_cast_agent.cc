@@ -96,6 +96,12 @@ void ControllableFileCastAgent::ResetViewport() {
   }
 }
 
+void ControllableFileCastAgent::SetAvSyncOffset(Clock::duration offset) {
+  if (sender_) {
+    sender_->SetAvSyncOffset(offset);
+  }
+}
+
 void ControllableFileCastAgent::OnConnected(SenderSocketFactory* factory,
                                             const IPEndpoint& endpoint,
                                             std::unique_ptr<CastSocket> socket) {
