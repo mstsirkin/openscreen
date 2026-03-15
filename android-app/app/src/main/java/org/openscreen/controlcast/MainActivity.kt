@@ -432,7 +432,10 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             if (exoPlayer.mediaItemCount == 0) {
                 exoPlayer.setMediaItem(MediaItem.fromUri(uri))
                 exoPlayer.prepare()
-                if (positionMs > 0) exoPlayer.seekTo(positionMs)
+                if (positionMs > 0) {
+                    exoPlayer.seekTo(positionMs)
+                    backend.seekTo(positionMs)
+                }
                 if (isPlaying) exoPlayer.play()
                 exoPlayer.volume = if (localSoundEnabled) 1f else 0f
             }

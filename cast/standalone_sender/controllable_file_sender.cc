@@ -105,22 +105,9 @@ void ControllableFileSender::SeekTo(Clock::duration position) {
   if (is_playing_) {
     StartPlaybackAt(last_known_position_);
   } else if (video_capturer_.has_value()) {
-    // Seek existing capturers while paused — produces frames at
-    // the new position so the TV shows a preview, then re-pauses.
+    // Decode and send exactly one video frame at the new position.
     auto ref = env_.now() + settings_.playout_delay;
-    video_capturer_->SeekTo(last_known_position_, ref);
-    if (audio_capturer_.has_value()) {
-      audio_capturer_->SeekTo(last_known_position_, ref);
-    }
-    // Re-pause after a few frames so we don't keep playing
-    next_task_.ScheduleFromNow([this] {
-      if (!is_playing_ && video_capturer_.has_value()) {
-        video_capturer_->SetPlaybackRate(0);
-      }
-      if (!is_playing_ && audio_capturer_.has_value()) {
-        audio_capturer_->SetPlaybackRate(0);
-      }
-    }, milliseconds(200));
+    video_capturer_->SeekAndDeliverOneFrame(last_known_position_, ref);
   }
 }
 

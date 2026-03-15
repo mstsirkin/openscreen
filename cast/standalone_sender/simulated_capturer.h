@@ -42,6 +42,9 @@ class SimulatedCapturer {
 
   void SetPlaybackRate(double rate);
   void SeekTo(Clock::duration media_time, Clock::time_point new_start_time);
+  // Seek and decode one frame immediately, even when paused.
+  void SeekAndDeliverOneFrame(Clock::duration media_time,
+                              Clock::time_point reference_time);
 
  protected:
   SimulatedCapturer(Environment& environment,

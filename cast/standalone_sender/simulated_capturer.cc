@@ -142,6 +142,47 @@ void SimulatedCapturer::SeekTo(Clock::duration media_time,
                       Alarm::kImmediately);
 }
 
+void SimulatedCapturer::SeekAndDeliverOneFrame(
+    Clock::duration media_time,
+    Clock::time_point reference_time) {
+  if (!format_context_ || stream_index_ < 0 || !decoder_context_) return;
+
+  // Seek the decoder.
+  const AVRational time_base =
+      format_context_->streams[stream_index_]->time_base;
+  const int64_t seek_target = av_rescale_q(
+      media_time.count(),
+      AVRational{Clock::duration::period::num, Clock::duration::period::den},
+      time_base);
+  av_seek_frame(format_context_.get(), stream_index_, seek_target,
+                AVSEEK_FLAG_BACKWARD);
+  avcodec_flush_buffers(decoder_context_.get());
+
+  // Decode frames until we get one at or past the seek target.
+  AVPacketUniquePtr packet = MakeUniqueAVPacket();
+  AVFrameUniquePtr frame = MakeUniqueAVFrame();
+  for (int attempts = 0; attempts < 100; ++attempts) {
+    int ret = av_read_frame(format_context_.get(), packet.get());
+    if (ret < 0) break;
+    if (packet->stream_index != stream_index_) {
+      av_packet_unref(packet.get());
+      continue;
+    }
+    ret = avcodec_send_packet(decoder_context_.get(), packet.get());
+    av_packet_unref(packet.get());
+    if (ret < 0) continue;
+
+    ret = avcodec_receive_frame(decoder_context_.get(), frame.get());
+    if (ret < 0) continue;
+
+    // Got a decoded frame — deliver it immediately.
+    Clock::time_point now = Clock::now();
+    DeliverDataToClient(*frame, now, now, reference_time);
+    av_frame_unref(frame.get());
+    return;
+  }
+}
+
 void SimulatedCapturer::SetAdditionalDecoderParameters(
     AVCodecContext* decoder_context) {}
 
