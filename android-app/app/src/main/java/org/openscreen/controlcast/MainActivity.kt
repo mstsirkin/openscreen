@@ -425,6 +425,16 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         }
     }
 
+    // Restore video after rotation (ExoPlayer is recreated but URI is saved)
+    LaunchedEffect(exoPlayer, selectedUri) {
+        selectedUri?.let { uri ->
+            if (exoPlayer.mediaItemCount == 0) {
+                exoPlayer.setMediaItem(MediaItem.fromUri(uri))
+                exoPlayer.prepare()
+            }
+        }
+    }
+
     LaunchedEffect(exoPlayer) {
         while (true) {
             durationMs = exoPlayer.duration.coerceAtLeast(0L)
