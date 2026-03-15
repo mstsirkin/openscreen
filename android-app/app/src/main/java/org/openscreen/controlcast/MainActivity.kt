@@ -8,6 +8,8 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -67,6 +69,17 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    private val permissionLauncher = registerForActivityResult(
+        RequestMultiplePermissions()
+    ) { /* permissions granted or denied, user retaps Calibrate */ }
+
+    fun requestCalibrationPermissions() {
+        permissionLauncher.launch(arrayOf(
+            android.Manifest.permission.CAMERA,
+            android.Manifest.permission.RECORD_AUDIO,
+        ))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Bind this process to the WiFi network so native UDP sockets
@@ -216,6 +229,11 @@ class NativeBackedBackend : CastControlBackend {
         refreshStatus()
     }
 
+    fun setAvSyncOffset(offsetMs: Long) {
+        nativeSetAvSyncOffset(offsetMs)
+        refreshStatus()
+    }
+
     fun setHwEncode(enabled: Boolean) {
         nativeSetHwEncode(enabled)
         refreshStatus()
@@ -241,6 +259,7 @@ class NativeBackedBackend : CastControlBackend {
     private external fun nativeUpdateViewport(zoom: Float, offsetX: Float, offsetY: Float)
     private external fun nativeSetMirrorLocally(enabled: Boolean)
     private external fun nativeGetStatus(): String
+    private external fun nativeSetAvSyncOffset(offsetMs: Long)
     private external fun nativeSetHwEncode(enabled: Boolean)
     private external fun nativeTestCast(target: String, filePath: String)
 
@@ -559,6 +578,36 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null)
                 },
             ) {
                 Text("Reset View")
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            val activity = context as? MainActivity
+            var calibrating by remember { mutableStateOf(false) }
+            Button(
+                onClick = {
+                    if (activity == null) return@Button
+                    val calibrator = AvSyncCalibrator(context)
+                    if (!calibrator.hasPermissions()) {
+                        activity.requestCalibrationPermissions()
+                        return@Button
+                    }
+                    // Cast the sync test pattern, then calibrate
+                    calibrating = true
+                    backend.testCast(
+                        connectedDevice?.let { discoveredDevices.firstOrNull { d -> d.name == it }?.target } ?: "",
+                        "/data/local/tmp/sync_test.mp4")
+                    coroutineScope.launch {
+                        delay(3000)  // Wait for cast to start
+                        val result = calibrator.calibrate(activity)
+                        calibrating = false
+                        Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                        if (result.numSamples > 0) {
+                            backend.setAvSyncOffset(result.offsetMs)
+                        }
+                    }
+                },
+                enabled = !calibrating && connectedDevice != null,
+            ) {
+                Text(if (calibrating) "..." else "Calibrate")
             }
         }
 

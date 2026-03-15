@@ -46,6 +46,7 @@ struct ControllerState {
   int video_fd2 = -1;
   std::string video_path;
   bool use_hw_encode = true;
+  long long av_sync_offset_ms = 30;
   std::string status = "Native backend ready.";
 
 #ifdef HAVE_OPENSCREEN
@@ -184,8 +185,12 @@ void StartCastSession(ControllerState& state,
           LOGI("Using software VP8 encoding");
         }
 
-        LOGI("TaskRunner: connecting to port %d with file=%s",
-             endpoint.port, video_path.c_str());
+        settings.av_sync_offset =
+            std::chrono::milliseconds(state.av_sync_offset_ms);
+
+        LOGI("TaskRunner: connecting to port %d with file=%s avsync=%lldms",
+             endpoint.port, video_path.c_str(),
+             (long long)state.av_sync_offset_ms);
         state.agent->Connect(std::move(settings));
 
         {
@@ -504,6 +509,17 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeSetHwEncode(
   std::lock_guard<std::mutex> lock(state.mutex);
   state.use_hw_encode = enabled == JNI_TRUE;
   LOGI("Hardware encoding %s", state.use_hw_encode ? "enabled" : "disabled");
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_org_openscreen_controlcast_NativeBackedBackend_nativeSetAvSyncOffset(
+    JNIEnv* env,
+    jobject thiz,
+    jlong offset_ms) {
+  auto& state = State();
+  std::lock_guard<std::mutex> lock(state.mutex);
+  state.av_sync_offset_ms = offset_ms;
+  LOGI("A/V sync offset set to %lld ms", (long long)offset_ms);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
