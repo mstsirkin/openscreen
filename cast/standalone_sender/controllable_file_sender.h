@@ -118,6 +118,7 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
   bool is_playing_ = false;
 
   VideoViewport viewport_;
+  int video_frame_count_ = 0;
 
   std::vector<uint8_t> padded_y_;
   std::vector<uint8_t> padded_u_;

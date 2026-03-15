@@ -165,7 +165,7 @@ void StartCastSession(ControllerState& state,
         openscreen::cast::ConnectionSettings settings;
         settings.receiver_endpoint = endpoint;
         settings.path_to_file = video_path;
-        settings.max_bitrate = 3000000;
+        settings.max_bitrate = 1500000;
         settings.should_include_video = true;
         settings.use_android_rtp_hack = true;
         settings.use_remoting = false;
@@ -397,8 +397,10 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativePlay(
     jobject thiz) {
   auto& state = State();
 #ifdef HAVE_OPENSCREEN
-  if (state.agent) {
-    state.agent->Play();
+  if (state.agent && state.task_runner) {
+    state.task_runner->PostTask([&state]() {
+      if (state.agent) state.agent->Play();
+    });
   }
 #endif
   std::lock_guard<std::mutex> lock(state.mutex);
@@ -412,8 +414,10 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativePause(
     jobject thiz) {
   auto& state = State();
 #ifdef HAVE_OPENSCREEN
-  if (state.agent) {
-    state.agent->Pause();
+  if (state.agent && state.task_runner) {
+    state.task_runner->PostTask([&state]() {
+      if (state.agent) state.agent->Pause();
+    });
   }
 #endif
   std::lock_guard<std::mutex> lock(state.mutex);
@@ -429,8 +433,12 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeSeekTo(
   auto& state = State();
   long long pos = std::max<long long>(0, position_ms);
 #ifdef HAVE_OPENSCREEN
-  if (state.agent) {
-    state.agent->SeekTo(std::chrono::milliseconds(pos));
+  if (state.agent && state.task_runner) {
+    state.task_runner->PostTask([&state, pos]() {
+      if (state.agent) {
+        state.agent->SeekTo(std::chrono::milliseconds(pos));
+      }
+    });
   }
 #endif
   std::lock_guard<std::mutex> lock(state.mutex);
@@ -448,12 +456,14 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeUpdateViewport(
   auto& state = State();
   float z = std::clamp<float>(zoom, 1.0f, 8.0f);
 #ifdef HAVE_OPENSCREEN
-  if (state.agent) {
+  if (state.agent && state.task_runner) {
     openscreen::cast::VideoViewport vp;
     vp.zoom = z;
     vp.center_x = 0.5 - offset_x / 1920.0;
     vp.center_y = 0.5 - offset_y / 1080.0;
-    state.agent->SetViewport(vp);
+    state.task_runner->PostTask([&state, vp]() {
+      if (state.agent) state.agent->SetViewport(vp);
+    });
   }
 #endif
   std::lock_guard<std::mutex> lock(state.mutex);

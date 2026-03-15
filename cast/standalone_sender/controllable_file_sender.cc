@@ -248,6 +248,15 @@ void ControllableFileSender::OnVideoFrame(const AVFrame& av_frame,
       start_position_ +
       std::max(reference_time - playback_start_time_, Clock::duration::zero()));
 
+#ifdef __ANDROID__
+  // Drop every other frame on Android to reduce encode load.
+  // Software VP8 at 854x480@30fps exceeds the phone CPU budget.
+  ++video_frame_count_;
+  if (video_frame_count_ % 3 != 0) {
+    return;
+  }
+#endif
+
   StreamingVideoEncoder::VideoFrame frame{};
   frame.capture_begin_time = capture_begin_time;
   frame.capture_end_time = capture_end_time;

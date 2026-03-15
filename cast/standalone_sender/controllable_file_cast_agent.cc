@@ -277,12 +277,12 @@ void ControllableFileCastAgent::CreateAndStartSession() {
 
   AudioCaptureConfig audio_config;
   audio_config.bit_rate = 192 * 1000;
-  audio_config.target_playout_delay = milliseconds(1000);
+  audio_config.target_playout_delay = milliseconds(2000);
   VideoCaptureConfig video_config = {
       .codec = connection_settings_->codec,
       .max_bit_rate =
           connection_settings_->max_bitrate - audio_config.bit_rate};
-  video_config.target_playout_delay = milliseconds(1000);
+  video_config.target_playout_delay = milliseconds(2000);
   video_config.resolutions.emplace_back(Resolution{854, 480});
 
   const Error err = current_session_->Negotiate({audio_config}, {video_config});
