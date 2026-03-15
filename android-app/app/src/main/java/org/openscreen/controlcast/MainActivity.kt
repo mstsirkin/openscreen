@@ -305,7 +305,22 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             backend.testCast(testTarget, testFile)
         }
         if (testCalibrate && activity != null) {
-            activity.requestCalibrationPermissions()
+            val calibrator = AvSyncCalibrator(context)
+            if (!calibrator.hasPermissions()) {
+                activity.requestCalibrationPermissions()
+            }
+            // Wait for permissions + cast to start
+            delay(5000)
+            if (AvSyncCalibrator(context).hasPermissions()) {
+                android.util.Log.i("ControlCast", "Starting calibration...")
+                val result = calibrator.calibrate(activity)
+                android.util.Log.i("ControlCast", "Calibration: ${result.message}")
+                if (result.numSamples > 0) {
+                    backend.setAvSyncOffset(result.offsetMs)
+                }
+            } else {
+                android.util.Log.e("ControlCast", "Calibration: permissions not granted")
+            }
         }
     }
     val backendStatus by backend.status.collectAsStateWithLifecycle()
