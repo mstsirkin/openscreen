@@ -239,9 +239,17 @@ void ControllableFileSender::OnAudioData(const float* interleaved_samples,
   last_known_position_ = ClampPosition(
       start_position_ +
       std::max(reference_time - playback_start_time_, Clock::duration::zero()));
+  // Empirically measured A/V sync correction: audio arrives ~30ms late
+  // relative to video at the Cast receiver, verified with a sync test
+  // video (simultaneous beep + flash).  The Opus codec_delay_ and
+  // resampler swr_get_delay are already compensated internally, so this
+  // residual offset likely comes from audio frame buffering in the
+  // encode/send pipeline.
+  constexpr auto kAudioSyncOffset = std::chrono::milliseconds(30);
   audio_encoder_.EncodeAndSend(interleaved_samples, num_samples,
-                               capture_begin_time, capture_end_time,
-                               reference_time);
+                               capture_begin_time - kAudioSyncOffset,
+                               capture_end_time - kAudioSyncOffset,
+                               reference_time - kAudioSyncOffset);
 }
 
 void ControllableFileSender::OnVideoFrame(const AVFrame& av_frame,

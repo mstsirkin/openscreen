@@ -55,13 +55,8 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
   bool is_playing() const { return is_playing_; }
 
  private:
-#ifdef __ANDROID__
-  static constexpr int kDisplayWidth = 854;
-  static constexpr int kDisplayHeight = 480;
-#else
   static constexpr int kDisplayWidth = 1920;
   static constexpr int kDisplayHeight = 1080;
-#endif
 
   void UpdateEncoderBitrates();
   void ControlForNetworkCongestion();

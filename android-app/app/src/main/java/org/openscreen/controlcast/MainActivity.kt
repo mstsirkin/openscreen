@@ -1,0 +1,658 @@
+package org.openscreen.controlcast
+
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.net.Uri
+import android.os.Bundle
+import android.os.ParcelFileDescriptor
+import android.view.ViewGroup.LayoutParams.MATCH_PARENT
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.documentfile.provider.DocumentFile
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // Bind this process to the WiFi network so native UDP sockets
+        // are routed correctly.  Without this, sendto() on UDP sockets
+        // created by Open Screen's native code fails with EPERM.
+        bindProcessToWifi()
+        val testTarget = intent?.getStringExtra("test_target")
+        val testFile = intent?.getStringExtra("test_file")
+        enableEdgeToEdge()
+        setContent {
+            MaterialTheme {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = Color(0xFF101317),
+                ) {
+                    ControlCastApp(testTarget, testFile)
+                }
+            }
+        }
+    }
+
+    private fun bindProcessToWifi() {
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        // Bind synchronously first.
+        cm.activeNetwork?.let { cm.bindProcessToNetwork(it) }
+        // Keep a persistent network request so the binding is maintained
+        // even if the network briefly drops and reconnects.
+        val request = NetworkRequest.Builder()
+            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .build()
+        cm.requestNetwork(request, object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: android.net.Network) {
+                cm.bindProcessToNetwork(network)
+            }
+        })
+    }
+}
+
+data class ViewportState(
+    val zoom: Float = 1f,
+    val offsetX: Float = 0f,
+    val offsetY: Float = 0f,
+)
+
+interface CastControlBackend {
+    val status: kotlinx.coroutines.flow.StateFlow<String>
+    suspend fun connect(target: String): Result<Unit>
+    fun disconnect()
+    fun openVideo(context: Context, uri: Uri, mirrorLocally: Boolean)
+    fun play()
+    fun pause()
+    fun seekTo(positionMs: Long)
+    fun updateViewport(viewport: ViewportState)
+    fun setMirrorLocally(enabled: Boolean)
+}
+
+class NativeBackedBackend : CastControlBackend {
+    private val mutableStatus =
+        kotlinx.coroutines.flow.MutableStateFlow("Native backend loaded.")
+    override val status: kotlinx.coroutines.flow.StateFlow<String> = mutableStatus
+
+    init {
+        nativeInit()
+        refreshStatus()
+    }
+
+    fun testCast(target: String, filePath: String) {
+        nativeTestCast(target, filePath)
+        refreshStatus()
+    }
+
+    override suspend fun connect(target: String): Result<Unit> {
+        return if (nativeConnect(target)) {
+            refreshStatus()
+            Result.success(Unit)
+        } else {
+            refreshStatus()
+            Result.failure(IllegalStateException(mutableStatus.value))
+        }
+    }
+
+    override fun disconnect() {
+        nativeDisconnect()
+        refreshStatus()
+    }
+
+    private var openPfd1: ParcelFileDescriptor? = null
+    private var openPfd2: ParcelFileDescriptor? = null
+
+    override fun openVideo(context: Context, uri: Uri, mirrorLocally: Boolean) {
+        openPfd1?.close()
+        openPfd2?.close()
+        openPfd1 = null
+        openPfd2 = null
+
+        // Try to resolve the content URI to a real file path that
+        // ffmpeg can open directly.  This works for /sdcard files.
+        val filePath = resolveFilePath(context, uri)
+        if (filePath != null) {
+            nativeOpenVideoPath(uri.toString(), filePath, mirrorLocally)
+        } else {
+            // Fallback: open two independent fds for audio/video capturers.
+            openPfd1 = context.contentResolver.openFileDescriptor(uri, "r")
+            openPfd2 = context.contentResolver.openFileDescriptor(uri, "r")
+            val fd1 = openPfd1?.fd ?: -1
+            val fd2 = openPfd2?.fd ?: -1
+            nativeOpenVideo(uri.toString(), fd1, fd2, mirrorLocally)
+        }
+        refreshStatus()
+    }
+
+    private fun resolveFilePath(context: Context, uri: Uri): String? {
+        if (uri.scheme == "file") return uri.path
+        if (uri.scheme != "content") return null
+        val cursor = context.contentResolver.query(
+            uri, arrayOf(android.provider.MediaStore.MediaColumns.DATA),
+            null, null, null)
+        cursor?.use {
+            if (it.moveToFirst()) {
+                val path = it.getString(0)
+                if (!path.isNullOrEmpty() && java.io.File(path).canRead()) {
+                    return path
+                }
+            }
+        }
+        return null
+    }
+
+    override fun play() {
+        nativePlay()
+        refreshStatus()
+    }
+
+    override fun pause() {
+        nativePause()
+        refreshStatus()
+    }
+
+    override fun seekTo(positionMs: Long) {
+        nativeSeekTo(positionMs)
+        refreshStatus()
+    }
+
+    override fun updateViewport(viewport: ViewportState) {
+        nativeUpdateViewport(viewport.zoom, viewport.offsetX, viewport.offsetY)
+        refreshStatus()
+    }
+
+    fun setHwEncode(enabled: Boolean) {
+        nativeSetHwEncode(enabled)
+        refreshStatus()
+    }
+
+    override fun setMirrorLocally(enabled: Boolean) {
+        nativeSetMirrorLocally(enabled)
+        refreshStatus()
+    }
+
+    private fun refreshStatus() {
+        mutableStatus.value = nativeGetStatus()
+    }
+
+    private external fun nativeInit()
+    private external fun nativeConnect(target: String): Boolean
+    private external fun nativeDisconnect()
+    private external fun nativeOpenVideo(uri: String, fd1: Int, fd2: Int, mirrorLocally: Boolean)
+    private external fun nativeOpenVideoPath(uri: String, filePath: String, mirrorLocally: Boolean)
+    private external fun nativePlay()
+    private external fun nativePause()
+    private external fun nativeSeekTo(positionMs: Long)
+    private external fun nativeUpdateViewport(zoom: Float, offsetX: Float, offsetY: Float)
+    private external fun nativeSetMirrorLocally(enabled: Boolean)
+    private external fun nativeGetStatus(): String
+    private external fun nativeSetHwEncode(enabled: Boolean)
+    private external fun nativeTestCast(target: String, filePath: String)
+
+    companion object {
+        init {
+            System.loadLibrary("controlcast")
+        }
+    }
+}
+
+private fun getAutoReconnectTargets(context: Context): Set<String> {
+    val prefs = context.getSharedPreferences("cast_devices", Context.MODE_PRIVATE)
+    return prefs.getStringSet("auto_reconnect", emptySet()) ?: emptySet()
+}
+
+private fun setAutoReconnect(context: Context, target: String, enabled: Boolean) {
+    val prefs = context.getSharedPreferences("cast_devices", Context.MODE_PRIVATE)
+    val current = prefs.getStringSet("auto_reconnect", emptySet())?.toMutableSet()
+        ?: mutableSetOf()
+    if (enabled) current.add(target) else current.remove(target)
+    prefs.edit().putStringSet("auto_reconnect", current).apply()
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ControlCastApp(testTarget: String? = null, testFile: String? = null) {
+    val context = LocalContext.current
+    val backend = remember { NativeBackedBackend() }
+
+    // Auto-cast when launched with test extras via adb:
+    // adb shell am start -n org.openscreen.controlcast/.MainActivity
+    //   --es test_target "192.168.1.189:8009"
+    //   --es test_file "/sdcard/DCIM/Camera/video.mp4"
+    LaunchedEffect(testTarget, testFile) {
+        if (!testTarget.isNullOrEmpty() && !testFile.isNullOrEmpty()) {
+            // Wait for the WiFi network binding callback to fire.
+            delay(1000)
+            backend.testCast(testTarget, testFile)
+        }
+    }
+    val backendStatus by backend.status.collectAsStateWithLifecycle()
+    val discovery = remember { CastDiscovery(context) }
+    val discoveredDevices by discovery.devices.collectAsStateWithLifecycle()
+    val coroutineScope = rememberCoroutineScope()
+    val exoPlayer = remember(context) {
+        ExoPlayer.Builder(context).build().apply {
+            repeatMode = Player.REPEAT_MODE_OFF
+            volume = 0f  // Muted by default — sound goes to Cast receiver.
+        }
+    }
+
+    var selectedUri by rememberSaveable { mutableStateOf<Uri?>(null) }
+    var localMirrorEnabled by rememberSaveable { mutableStateOf(true) }
+    var localSoundEnabled by rememberSaveable { mutableStateOf(false) }
+    var isPlaying by rememberSaveable { mutableStateOf(false) }
+    var durationMs by remember { mutableLongStateOf(0L) }
+    var positionMs by remember { mutableLongStateOf(0L) }
+    var viewport by remember { mutableStateOf(ViewportState()) }
+    var sliderValue by remember { mutableFloatStateOf(0f) }
+    var sliderDragging by remember { mutableStateOf(false) }
+    var connectedDevice by rememberSaveable { mutableStateOf<String?>(null) }
+    var autoReconnectTargets by remember {
+        mutableStateOf(getAutoReconnectTargets(context))
+    }
+
+    // Connect to a device and optionally send the current video.
+    fun connectToDevice(device: CastDevice) {
+        coroutineScope.launch {
+            val result = backend.connect(device.target)
+            if (result.isSuccess) {
+                connectedDevice = device.name
+                selectedUri?.let { uri ->
+                    backend.openVideo(context, uri, localMirrorEnabled)
+                }
+            }
+        }
+    }
+
+    DisposableEffect(exoPlayer) {
+        onDispose { exoPlayer.release() }
+    }
+
+    DisposableEffect(discovery) {
+        discovery.startDiscovery()
+        onDispose { discovery.stopDiscovery() }
+    }
+
+    // Auto-reconnect: when a device marked for auto-reconnect appears
+    // and nothing is connected yet, connect automatically.
+    LaunchedEffect(discoveredDevices, connectedDevice) {
+        if (connectedDevice != null) return@LaunchedEffect
+        val targets = getAutoReconnectTargets(context)
+        val match = discoveredDevices.firstOrNull { it.target in targets }
+        if (match != null) {
+            val result = backend.connect(match.target)
+            if (result.isSuccess) {
+                connectedDevice = match.name
+                selectedUri?.let { uri ->
+                    backend.openVideo(context, uri, localMirrorEnabled)
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(exoPlayer) {
+        while (true) {
+            durationMs = exoPlayer.duration.coerceAtLeast(0L)
+            if (!sliderDragging) {
+                positionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+                sliderValue = if (durationMs > 0L) {
+                    positionMs.toFloat() / durationMs.toFloat()
+                } else {
+                    0f
+                }
+            }
+            isPlaying = exoPlayer.isPlaying
+            delay(200)
+        }
+    }
+
+    val openVideoLauncher = rememberLauncherForActivityResult(OpenDocument()) { uri ->
+        if (uri != null) {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+            selectedUri = uri
+            val mediaItem = MediaItem.fromUri(uri)
+            exoPlayer.setMediaItem(mediaItem)
+            exoPlayer.prepare()
+            if (localMirrorEnabled) {
+                exoPlayer.play()
+            }
+            backend.openVideo(context, uri, localMirrorEnabled)
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Text(
+            text = "OpenScreen Control Cast",
+            style = MaterialTheme.typography.headlineMedium,
+            color = Color(0xFFF5F7FA),
+            fontWeight = FontWeight.SemiBold,
+        )
+
+        Text(
+            text = backendStatus,
+            color = Color(0xFF9CB0C3),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+
+        // Device discovery section
+        Text(
+            text = "Cast devices",
+            color = Color(0xFFD9E2EC),
+            style = MaterialTheme.typography.titleMedium,
+        )
+
+        if (connectedDevice != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Connected: $connectedDevice",
+                    color = Color(0xFF9CB0C3),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                Button(onClick = {
+                    backend.disconnect()
+                    connectedDevice = null
+                }) {
+                    Text("Disconnect")
+                }
+            }
+        }
+
+        if (discoveredDevices.isEmpty()) {
+            Text(
+                text = "Searching for Cast receivers...",
+                color = Color(0xFF6B7F8E),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        } else {
+            for (device in discoveredDevices) {
+                val isConnected = device.name == connectedDevice
+                val isAutoReconnect = device.target in autoReconnectTargets
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(
+                            if (isConnected) Color(0xFF1E3A5F)
+                            else Color(0xFF182028),
+                            RoundedCornerShape(8.dp),
+                        )
+                        .clickable { connectToDevice(device) }
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = device.name,
+                            color = Color(0xFFD9E2EC),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            text = device.target,
+                            color = Color(0xFF6B7F8E),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Switch(
+                            checked = isAutoReconnect,
+                            onCheckedChange = { enabled ->
+                                setAutoReconnect(context, device.target, enabled)
+                                autoReconnectTargets =
+                                    getAutoReconnectTargets(context)
+                            },
+                            modifier = Modifier.size(40.dp),
+                        )
+                        Text(
+                            text = "Auto",
+                            color = Color(0xFF6B7F8E),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
+            }
+        }
+
+        // Video controls
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Button(onClick = { openVideoLauncher.launch(arrayOf("video/*")) }) {
+                Text("Open Video")
+            }
+            Button(
+                onClick = {
+                    if (isPlaying) {
+                        exoPlayer.pause()
+                        backend.pause()
+                    } else {
+                        exoPlayer.play()
+                        backend.play()
+                    }
+                    isPlaying = !isPlaying
+                },
+                enabled = selectedUri != null,
+            ) {
+                Text(if (isPlaying) "Pause" else "Play")
+            }
+            Text(
+                text = DocumentFile.fromSingleUri(context, selectedUri ?: Uri.EMPTY)?.name
+                    ?: "No file",
+                modifier = Modifier.weight(1f),
+                color = Color(0xFFD9E2EC),
+            )
+        }
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Switch(
+                checked = localMirrorEnabled,
+                onCheckedChange = {
+                    localMirrorEnabled = it
+                    backend.setMirrorLocally(it)
+                    if (!it) {
+                        exoPlayer.pause()
+                    }
+                },
+            )
+            Text("Local mirror", color = Color(0xFFD9E2EC))
+            Spacer(modifier = Modifier.width(12.dp))
+            var hwEncodeEnabled by rememberSaveable { mutableStateOf(true) }
+            Switch(
+                checked = hwEncodeEnabled,
+                onCheckedChange = {
+                    hwEncodeEnabled = it
+                    backend.setHwEncode(it)
+                },
+            )
+            Text("HW encode", color = Color(0xFFD9E2EC))
+        }
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Switch(
+                checked = localSoundEnabled,
+                onCheckedChange = {
+                    localSoundEnabled = it
+                    exoPlayer.volume = if (it) 1f else 0f
+                },
+            )
+            Text("Local sound", color = Color(0xFFD9E2EC))
+            Spacer(modifier = Modifier.width(12.dp))
+            Button(
+                onClick = {
+                    viewport = ViewportState()
+                    backend.updateViewport(viewport)
+                },
+            ) {
+                Text("Reset View")
+            }
+        }
+
+        if (localMirrorEnabled) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(320.dp)
+                    .background(Color.Black, RoundedCornerShape(24.dp))
+                    .pointerInput(Unit) {
+                        detectTransformGestures { _, pan, zoom, _ ->
+                            val newZoom = (viewport.zoom * zoom).coerceIn(1f, 8f)
+                            val zoomRatio =
+                                if (newZoom == 0f) 1f else newZoom / viewport.zoom
+                            val nextViewport = viewport.copy(
+                                zoom = newZoom,
+                                offsetX = (viewport.offsetX + pan.x * zoomRatio)
+                                    .coerceIn(-1200f, 1200f),
+                                offsetY = (viewport.offsetY + pan.y * zoomRatio)
+                                    .coerceIn(-1200f, 1200f),
+                            )
+                            viewport = nextViewport
+                            backend.updateViewport(nextViewport)
+                        }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                AndroidView(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            scaleX = viewport.zoom
+                            scaleY = viewport.zoom
+                            translationX = viewport.offsetX
+                            translationY = viewport.offsetY
+                            clip = true
+                        },
+                    factory = { androidContext ->
+                        PlayerView(androidContext).apply {
+                            player = exoPlayer
+                            useController = false
+                            layoutParams = android.view.ViewGroup.LayoutParams(
+                                MATCH_PARENT, MATCH_PARENT)
+                        }
+                    },
+                    update = { it.player = exoPlayer },
+                )
+            }
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(320.dp)
+                    .background(Color(0xFF182028), RoundedCornerShape(24.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("Local mirror disabled", color = Color(0xFF9CB0C3))
+            }
+        }
+
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Slider(
+                value = sliderValue,
+                onValueChange = {
+                    sliderDragging = true
+                    sliderValue = it
+                    positionMs = (durationMs * it).toLong()
+                },
+                onValueChangeFinished = {
+                    sliderDragging = false
+                    exoPlayer.seekTo(positionMs)
+                    backend.seekTo(positionMs)
+                },
+                enabled = durationMs > 0L,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(formatTime(positionMs), color = Color(0xFFD9E2EC))
+                Text(formatTime(durationMs), color = Color(0xFFD9E2EC))
+            }
+        }
+    }
+}
+
+private fun formatTime(valueMs: Long): String {
+    val totalSeconds = (valueMs / 1000).coerceAtLeast(0L)
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return if (hours > 0) {
+        "%d:%02d:%02d".format(hours, minutes, seconds)
+    } else {
+        "%02d:%02d".format(minutes, seconds)
+    }
+}

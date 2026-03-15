@@ -283,11 +283,7 @@ void ControllableFileCastAgent::CreateAndStartSession() {
       .max_bit_rate =
           connection_settings_->max_bitrate - audio_config.bit_rate};
   video_config.target_playout_delay = milliseconds(2000);
-  if (connection_settings_->codec == VideoCodec::kH264) {
-    video_config.resolutions.emplace_back(Resolution{1920, 1080});
-  } else {
-    video_config.resolutions.emplace_back(Resolution{854, 480});
-  }
+  video_config.resolutions.emplace_back(Resolution{1920, 1080});
 
   const Error err = current_session_->Negotiate({audio_config}, {video_config});
   if (!err.ok()) {
