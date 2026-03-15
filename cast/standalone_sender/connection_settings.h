@@ -57,7 +57,7 @@ struct ConnectionSettings {
   // difference. Positive = audio plays earlier. Measured empirically
   // using a sync test (simultaneous beep + flash). Default 30ms works
   // for most Cast receivers (Google TV).
-  Clock::duration av_sync_offset = std::chrono::milliseconds(30);
+  Clock::duration av_sync_offset = std::chrono::milliseconds(0);
 };
 
 }  // namespace openscreen::cast

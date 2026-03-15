@@ -46,7 +46,7 @@ struct ControllerState {
   int video_fd2 = -1;
   std::string video_path;
   bool use_hw_encode = true;
-  long long av_sync_offset_ms = 30;
+  long long av_sync_offset_ms = 0;
   std::string status = "Native backend ready.";
 
 #ifdef HAVE_OPENSCREEN

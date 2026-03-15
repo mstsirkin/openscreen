@@ -611,7 +611,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text("A/V sync:", color = Color(0xFFD9E2EC))
-            var offsetText by rememberSaveable { mutableStateOf("30") }
+            var offsetText by rememberSaveable { mutableStateOf("0") }
             androidx.compose.material3.OutlinedTextField(
                 value = offsetText,
                 onValueChange = { new ->
