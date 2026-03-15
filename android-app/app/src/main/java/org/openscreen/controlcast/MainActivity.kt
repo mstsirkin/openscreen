@@ -363,10 +363,12 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var localMirrorEnabled by rememberSaveable { mutableStateOf(true) }
     var localSoundEnabled by rememberSaveable { mutableStateOf(false) }
     var isPlaying by rememberSaveable { mutableStateOf(false) }
-    var durationMs by remember { mutableLongStateOf(0L) }
+    var durationMs by rememberSaveable { mutableLongStateOf(0L) }
     var positionMs by rememberSaveable { mutableLongStateOf(0L) }
     var viewport by remember { mutableStateOf(ViewportState()) }
-    var sliderValue by remember { mutableFloatStateOf(0f) }
+    var sliderValue by rememberSaveable {
+        mutableFloatStateOf(if (durationMs > 0L) positionMs.toFloat() / durationMs.toFloat() else 0f)
+    }
     var sliderDragging by remember { mutableStateOf(false) }
     var lastSeekMs by remember { mutableLongStateOf(0L) }
     var restored by remember { mutableStateOf(false) }
@@ -436,12 +438,15 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             if (exoPlayer.mediaItemCount == 0) {
                 exoPlayer.setMediaItem(MediaItem.fromUri(uri))
                 exoPlayer.prepare()
-                if (positionMs > 0) {
-                    exoPlayer.seekTo(positionMs)
-                    backend.seekTo(positionMs)
+                while (exoPlayer.playbackState != Player.STATE_READY &&
+                       exoPlayer.playbackState != Player.STATE_ENDED) {
+                    delay(50)
                 }
-                if (isPlaying) exoPlayer.play()
+                durationMs = exoPlayer.duration.coerceAtLeast(0L)
+                exoPlayer.seekTo(positionMs)
+                sliderValue = if (durationMs > 0L) positionMs.toFloat() / durationMs.toFloat() else 0f
                 exoPlayer.volume = if (localSoundEnabled) 1f else 0f
+                if (isPlaying) exoPlayer.play()
                 restored = true
             }
         }
