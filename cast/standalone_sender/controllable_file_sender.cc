@@ -172,10 +172,9 @@ void ControllableFileSender::StartPlaybackAt(Clock::duration position) {
     return;
   }
 
-  // Wait for the playout delay duration before starting — this gives
-  // time for in-flight frames from before pause to be ACK'd, and
-  // matches the receiver's buffer size.
-  playback_start_time_ = env_.now() + settings_.playout_delay;
+  // Wait 500ms before starting to give time for in-flight frames
+  // from before pause to be ACK'd by the receiver.
+  playback_start_time_ = env_.now() + milliseconds(500);
 
 
   num_capturers_running_ = 2;
