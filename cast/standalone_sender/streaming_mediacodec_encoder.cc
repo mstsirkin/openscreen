@@ -154,10 +154,15 @@ void StreamingMediaCodecEncoder::EncodeAndSend(
     }
   }
 
-  // Check in-flight duration.
+  // Check in-flight duration. If too high (e.g. after pause/play),
+  // re-sync the timeline and request a key frame so recovery is quick.
   if (sender_->GetInFlightMediaDuration(rtp_timestamp) >
       sender_->GetMaxInFlightMediaDuration()) {
-    return;  // Drop: too many frames in flight.
+    start_time_ = reference_time -
+        last_enqueued_rtp_timestamp_.ToTimeSinceOrigin<Clock::duration>(
+            sender_->rtp_timebase());
+    needs_key_frame_ = true;
+    return;
   }
 
   // Get an input buffer.

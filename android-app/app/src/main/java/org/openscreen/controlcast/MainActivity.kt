@@ -731,38 +731,42 @@ private fun SettingsRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text("Buffer:", color = Color(0xFFD9E2EC))
         var bufferText by rememberSaveable { mutableStateOf("400") }
-        androidx.compose.material3.OutlinedTextField(
-            value = bufferText,
-            onValueChange = { new ->
-                bufferText = new.filter { it.isDigit() }
-                bufferText.toIntOrNull()?.let { backend.setPlayoutDelay(it) }
-            },
-            modifier = Modifier.width(70.dp),
-            textStyle = androidx.compose.ui.text.TextStyle(
-                color = Color(0xFFD9E2EC),
-                fontSize = 14.sp,
-            ),
-            singleLine = true,
-            suffix = { Text("ms", color = Color(0xFF6B7F8E)) },
-        )
-        Text("A/V:", color = Color(0xFFD9E2EC))
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("Buffer", color = Color(0xFF6B7F8E), style = MaterialTheme.typography.labelSmall)
+            androidx.compose.material3.OutlinedTextField(
+                value = bufferText,
+                onValueChange = { new ->
+                    bufferText = new.filter { it.isDigit() }
+                    bufferText.toIntOrNull()?.let { backend.setPlayoutDelay(it) }
+                },
+                modifier = Modifier.width(80.dp),
+                textStyle = androidx.compose.ui.text.TextStyle(
+                    color = Color(0xFFD9E2EC),
+                    fontSize = 14.sp,
+                ),
+                singleLine = true,
+            )
+            Text("ms", color = Color(0xFF6B7F8E), style = MaterialTheme.typography.labelSmall)
+        }
         var offsetText by rememberSaveable { mutableStateOf("0") }
-        androidx.compose.material3.OutlinedTextField(
-            value = offsetText,
-            onValueChange = { new ->
-                offsetText = new.filter { it.isDigit() || it == '-' }
-                offsetText.toLongOrNull()?.let { backend.setAvSyncOffset(it) }
-            },
-            modifier = Modifier.width(70.dp),
-            textStyle = androidx.compose.ui.text.TextStyle(
-                color = Color(0xFFD9E2EC),
-                fontSize = 14.sp,
-            ),
-            singleLine = true,
-            suffix = { Text("ms", color = Color(0xFF6B7F8E)) },
-        )
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("A/V sync", color = Color(0xFF6B7F8E), style = MaterialTheme.typography.labelSmall)
+            androidx.compose.material3.OutlinedTextField(
+                value = offsetText,
+                onValueChange = { new ->
+                    offsetText = new.filter { it.isDigit() || it == '-' }
+                    offsetText.toLongOrNull()?.let { backend.setAvSyncOffset(it) }
+                },
+                modifier = Modifier.width(80.dp),
+                textStyle = androidx.compose.ui.text.TextStyle(
+                    color = Color(0xFFD9E2EC),
+                    fontSize = 14.sp,
+                ),
+                singleLine = true,
+            )
+            Text("ms", color = Color(0xFF6B7F8E), style = MaterialTheme.typography.labelSmall)
+        }
         val activity = context as? MainActivity
         var calibrating by remember { mutableStateOf(false) }
         Button(

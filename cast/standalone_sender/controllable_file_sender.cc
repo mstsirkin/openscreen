@@ -172,7 +172,12 @@ void ControllableFileSender::StartPlaybackAt(Clock::duration position) {
     return;
   }
 
-  playback_start_time_ = env_.now() + milliseconds(250);
+  // Wait for the playout delay duration before starting — this gives
+  // time for in-flight frames from before pause to be ACK'd, and
+  // matches the receiver's buffer size.
+  playback_start_time_ = env_.now() + settings_.playout_delay;
+
+
   num_capturers_running_ = 2;
   audio_capturer_.emplace(env_, settings_.path_to_file.c_str(),
                           audio_encoder_.num_channels(),
