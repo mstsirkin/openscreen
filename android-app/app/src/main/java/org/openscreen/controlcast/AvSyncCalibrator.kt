@@ -93,24 +93,16 @@ class AvSyncCalibrator(private val context: Context) {
 
             analysis.setAnalyzer(ContextCompat.getMainExecutor(context)) { image ->
                 val brightness = computeBrightness(image)
-                // Camera sensor timestamp is CLOCK_BOOTTIME.
-                // Convert to CLOCK_MONOTONIC to match audio timestamps:
-                // offset = BOOTTIME - MONOTONIC (constant for device uptime)
-                val sensorTs = image.imageInfo.timestamp  // BOOTTIME nanos
-                val now = System.nanoTime()  // MONOTONIC nanos
-                val boottime = android.os.SystemClock.elapsedRealtimeNanos()
-                val clockOffset = boottime - now  // BOOTTIME - MONOTONIC
-                val sensorTsMono = sensorTs - clockOffset  // convert to MONOTONIC
+                val now = System.nanoTime()
 
                 // Detect brightness spike (flash)
                 if (brightness > lastBrightness * 1.5 &&
                     brightness > 40 &&
                     now - cooldown > 1_000_000_000L
                 ) {
-                    android.util.Log.i("Calibrate",
-                        "Flash: brightness=${"%.1f".format(brightness)} camLatency=${(now-sensorTsMono)/1000000}ms")
+                    android.util.Log.i("Calibrate", "Flash: brightness=${"%.1f".format(brightness)} prev=${"%.1f".format(lastBrightness)}")
                     synchronized(flashTimestamps) {
-                        flashTimestamps.add(sensorTsMono)
+                        flashTimestamps.add(now)
                     }
                     cooldown = now
                 }
@@ -162,30 +154,13 @@ class AvSyncCalibrator(private val context: Context) {
         val running = java.util.concurrent.atomic.AtomicBoolean(true)
         var cooldown = 0L
         val buffer = ShortArray(bufSize / 2)
-        val audioTimestamp = android.media.AudioTimestamp()
-        var totalFramesRead = 0L
 
         recorder.startRecording()
         Thread {
             while (running.get()) {
                 val read = recorder.read(buffer, 0, buffer.size)
                 if (read > 0) {
-                    // Compute hardware capture timestamp from frame position.
-                    // AudioRecord.getTimestamp() gives us a mapping from frame
-                    // count to nanoseconds, removing audio pipeline latency.
                     val now = System.nanoTime()
-                    var captureTs = now  // fallback
-                    if (recorder.getTimestamp(audioTimestamp,
-                            android.media.AudioTimestamp.TIMEBASE_MONOTONIC) ==
-                        android.media.AudioRecord.SUCCESS) {
-                        // Extrapolate: timestamp is for audioTimestamp.framePosition,
-                        // we want the timestamp for the start of this buffer.
-                        val frameDelta = totalFramesRead - audioTimestamp.framePosition
-                        captureTs = audioTimestamp.nanoTime +
-                            (frameDelta * 1_000_000_000L / sampleRate)
-                    }
-                    totalFramesRead += read
-
                     // Find peak amplitude
                     var maxAmp = 0
                     for (i in 0 until read) {
@@ -194,10 +169,9 @@ class AvSyncCalibrator(private val context: Context) {
                     }
                     // Detect beep (loud peak)
                     if (maxAmp > 3000 && now - cooldown > 1_000_000_000L) {
-                        android.util.Log.i("Calibrate",
-                            "Beep: amp=$maxAmp captureTs=$captureTs wallTs=$now delta=${(now-captureTs)/1000000}ms")
+                        android.util.Log.i("Calibrate", "Beep: amp=$maxAmp")
                         synchronized(beepTimestamps) {
-                            beepTimestamps.add(captureTs)
+                            beepTimestamps.add(now)
                         }
                         cooldown = now
                     }
