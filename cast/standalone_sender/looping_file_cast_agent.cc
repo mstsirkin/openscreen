@@ -14,6 +14,7 @@
 #include "cast/common/public/cast_streaming_app_ids.h"
 #include "cast/standalone_sender/ffmpeg_glue.h"
 #include "cast/standalone_sender/looping_file_sender.h"
+#include "util/chrono_helpers.h"
 #include "cast/streaming/public/capture_recommendations.h"
 #include "cast/streaming/public/constants.h"
 #include "cast/streaming/public/offer_messages.h"
@@ -299,11 +300,15 @@ void LoopingFileCastAgent::CreateAndStartSession() {
   AudioCaptureConfig audio_config;
   // Opus does best at 192kbps, so we cap that here.
   audio_config.bit_rate = 192 * 1000;
+  // Use a 1s playout delay for both audio and video so the receiver
+  // buffers them identically, keeping A/V in sync.
+  audio_config.target_playout_delay = milliseconds(1000);
   VideoCaptureConfig video_config = {
       .codec = connection_settings_->codec,
       // The video config is allowed to use whatever is left over after audio.
       .max_bit_rate =
           connection_settings_->max_bitrate - audio_config.bit_rate};
+  video_config.target_playout_delay = milliseconds(1000);
   // Always use 1920x1080 for the display. Files with different aspect
   // ratios will be pillarboxed/letterboxed to fit.
   video_config.resolutions.emplace_back(Resolution{1920, 1080});
