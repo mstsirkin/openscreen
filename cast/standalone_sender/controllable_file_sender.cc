@@ -11,6 +11,9 @@
 #if defined(CAST_STANDALONE_SENDER_HAVE_LIBAOM)
 #include "cast/standalone_sender/streaming_av1_encoder.h"
 #endif
+#if defined(__ANDROID__) && defined(CAST_STANDALONE_SENDER_HAVE_MEDIACODEC)
+#include "cast/standalone_sender/streaming_mediacodec_encoder.h"
+#endif
 #include "cast/standalone_sender/ffmpeg_glue.h"
 #include "cast/standalone_sender/streaming_vpx_encoder.h"
 #include "platform/base/trivial_clock_traits.h"
@@ -52,7 +55,8 @@ ControllableFileSender::ControllableFileSender(
   OSP_CHECK(senders.audio_config.codec == AudioCodec::kOpus);
   OSP_CHECK(senders.video_config.codec == VideoCodec::kVp8 ||
             senders.video_config.codec == VideoCodec::kVp9 ||
-            senders.video_config.codec == VideoCodec::kAv1);
+            senders.video_config.codec == VideoCodec::kAv1 ||
+            senders.video_config.codec == VideoCodec::kH264);
 
   padded_y_.assign(kDisplayWidth * kDisplayHeight, 16);
   padded_u_.assign(kDisplayWidth / 2 * kDisplayHeight / 2, 128);
@@ -248,9 +252,8 @@ void ControllableFileSender::OnVideoFrame(const AVFrame& av_frame,
       start_position_ +
       std::max(reference_time - playback_start_time_, Clock::duration::zero()));
 
-#ifdef __ANDROID__
-  // Drop every other frame on Android to reduce encode load.
-  // Software VP8 at 854x480@30fps exceeds the phone CPU budget.
+#if defined(__ANDROID__) && !defined(CAST_STANDALONE_SENDER_HAVE_MEDIACODEC)
+  // Drop frames on Android with software encoding to reduce CPU load.
   ++video_frame_count_;
   if (video_frame_count_ % 3 != 0) {
     return;
@@ -286,6 +289,12 @@ std::unique_ptr<StreamingVideoEncoder> ControllableFileSender::CreateVideoEncode
     const StreamingVideoEncoder::Parameters& params,
     TaskRunner& task_runner,
     std::unique_ptr<Sender> sender) {
+#if defined(__ANDROID__) && defined(CAST_STANDALONE_SENDER_HAVE_MEDIACODEC)
+  if (params.codec == VideoCodec::kH264) {
+    return std::make_unique<StreamingMediaCodecEncoder>(params, task_runner,
+                                                       std::move(sender));
+  }
+#endif
   switch (params.codec) {
     case VideoCodec::kVp8:
     case VideoCodec::kVp9:

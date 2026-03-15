@@ -22,6 +22,9 @@ if (!build_with_chromium) {
     if (have_libaom) {
       defines += [ "CAST_STANDALONE_SENDER_HAVE_LIBAOM" ]
     }
+    if (is_android) {
+      defines += [ "CAST_STANDALONE_SENDER_HAVE_MEDIACODEC" ]
+    }
   }
 
   if (have_external_libs) {
@@ -75,6 +78,14 @@ if (!build_with_chromium) {
         include_dirs += libaom_include_dirs
         lib_dirs += libaom_lib_dirs
         libs += libaom_libs
+      }
+
+      if (is_android) {
+        sources += [
+          "streaming_mediacodec_encoder.cc",
+          "streaming_mediacodec_encoder.h",
+        ]
+        libs += [ "mediandk" ]
       }
 
       configs = [ "../common:certificate_config" ]

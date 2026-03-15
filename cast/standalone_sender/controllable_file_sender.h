@@ -118,7 +118,9 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
   bool is_playing_ = false;
 
   VideoViewport viewport_;
+#if defined(__ANDROID__) && !defined(CAST_STANDALONE_SENDER_HAVE_MEDIACODEC)
   int video_frame_count_ = 0;
+#endif
 
   std::vector<uint8_t> padded_y_;
   std::vector<uint8_t> padded_u_;

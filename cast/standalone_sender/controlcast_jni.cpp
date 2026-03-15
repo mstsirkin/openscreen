@@ -45,6 +45,7 @@ struct ControllerState {
   int video_fd = -1;
   int video_fd2 = -1;
   std::string video_path;
+  bool use_hw_encode = true;
   std::string status = "Native backend ready.";
 
 #ifdef HAVE_OPENSCREEN
@@ -165,13 +166,23 @@ void StartCastSession(ControllerState& state,
         openscreen::cast::ConnectionSettings settings;
         settings.receiver_endpoint = endpoint;
         settings.path_to_file = video_path;
-        settings.max_bitrate = 1500000;
         settings.should_include_video = true;
         settings.use_android_rtp_hack = true;
         settings.use_remoting = false;
         settings.should_loop_video = false;
-        settings.codec = openscreen::cast::VideoCodec::kVp8;
         settings.enable_dscp = true;
+#if defined(CAST_STANDALONE_SENDER_HAVE_MEDIACODEC)
+        if (state.use_hw_encode) {
+          settings.codec = openscreen::cast::VideoCodec::kH264;
+          settings.max_bitrate = 5000000;
+          LOGI("Using hardware H.264 encoding");
+        } else
+#endif
+        {
+          settings.codec = openscreen::cast::VideoCodec::kVp8;
+          settings.max_bitrate = 1500000;
+          LOGI("Using software VP8 encoding");
+        }
 
         LOGI("TaskRunner: connecting to port %d with file=%s",
              endpoint.port, video_path.c_str());
@@ -482,6 +493,17 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeSetMirrorLocally(
   std::lock_guard<std::mutex> lock(state.mutex);
   state.mirror_locally = enabled == JNI_TRUE;
   UpdateStatusLocked(state);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_org_openscreen_controlcast_NativeBackedBackend_nativeSetHwEncode(
+    JNIEnv* env,
+    jobject thiz,
+    jboolean enabled) {
+  auto& state = State();
+  std::lock_guard<std::mutex> lock(state.mutex);
+  state.use_hw_encode = enabled == JNI_TRUE;
+  LOGI("Hardware encoding %s", state.use_hw_encode ? "enabled" : "disabled");
 }
 
 extern "C" JNIEXPORT jstring JNICALL
