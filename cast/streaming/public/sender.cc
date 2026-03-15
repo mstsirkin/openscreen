@@ -88,7 +88,14 @@ Clock::duration Sender::GetMaxInFlightMediaDuration() const {
   // within the first half of the playout delay window. This leaves the second
   // half for executing all network transmits/re-transmits, plus decoding and
   // play-out at the Receiver.
-  return (target_playout_delay_ / 2) + (round_trip_time_ / 2);
+  //
+  // When the round trip time hasn't been measured yet, assume a generous
+  // 1000ms to avoid dropping frames on high-latency WiFi networks.
+  constexpr auto kDefaultAssumedRtt = std::chrono::milliseconds(1000);
+  const auto effective_rtt = (round_trip_time_ > Clock::duration::zero())
+                                 ? round_trip_time_
+                                 : Clock::to_duration(kDefaultAssumedRtt);
+  return (target_playout_delay_ / 2) + (effective_rtt / 2);
 }
 
 bool Sender::NeedsKeyFrame() const {
