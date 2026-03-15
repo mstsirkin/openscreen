@@ -283,14 +283,14 @@ void ControllableFileCastAgent::CreateAndStartSession() {
 
   AudioCaptureConfig audio_config;
   audio_config.bit_rate = 192 * 1000;
-  // Playout delay = receiver buffer before rendering.
-  // 400ms balances responsiveness with WiFi jitter resilience.
-  audio_config.target_playout_delay = milliseconds(400);
+  audio_config.target_playout_delay =
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          connection_settings_->playout_delay);
   VideoCaptureConfig video_config = {
       .codec = connection_settings_->codec,
       .max_bit_rate =
           connection_settings_->max_bitrate - audio_config.bit_rate};
-  video_config.target_playout_delay = milliseconds(400);
+  video_config.target_playout_delay = audio_config.target_playout_delay;
   video_config.resolutions.emplace_back(Resolution{1920, 1080});
 
   const Error err = current_session_->Negotiate({audio_config}, {video_config});

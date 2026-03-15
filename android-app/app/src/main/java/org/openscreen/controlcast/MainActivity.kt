@@ -231,6 +231,10 @@ class NativeBackedBackend : CastControlBackend {
         refreshStatus()
     }
 
+    fun setPlayoutDelay(delayMs: Int) {
+        nativeSetPlayoutDelay(delayMs)
+    }
+
     fun setAvSyncOffset(offsetMs: Long) {
         nativeSetAvSyncOffset(offsetMs)
         refreshStatus()
@@ -261,6 +265,7 @@ class NativeBackedBackend : CastControlBackend {
     private external fun nativeUpdateViewport(zoom: Float, offsetX: Float, offsetY: Float)
     private external fun nativeSetMirrorLocally(enabled: Boolean)
     private external fun nativeGetStatus(): String
+    private external fun nativeSetPlayoutDelay(delayMs: Int)
     private external fun nativeSetAvSyncOffset(offsetMs: Long)
     private external fun nativeSetHwEncode(enabled: Boolean)
     private external fun nativeTestCast(target: String, filePath: String)
@@ -627,11 +632,27 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             }
         }
 
-        // A/V sync offset
+        // Buffer size and A/V sync
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            Text("Buffer:", color = Color(0xFFD9E2EC))
+            var bufferText by rememberSaveable { mutableStateOf("400") }
+            androidx.compose.material3.OutlinedTextField(
+                value = bufferText,
+                onValueChange = { new ->
+                    bufferText = new.filter { it.isDigit() }
+                    bufferText.toIntOrNull()?.let { backend.setPlayoutDelay(it) }
+                },
+                modifier = Modifier.width(70.dp),
+                textStyle = androidx.compose.ui.text.TextStyle(
+                    color = Color(0xFFD9E2EC),
+                    fontSize = 14.sp,
+                ),
+                singleLine = true,
+                suffix = { Text("ms", color = Color(0xFF6B7F8E)) },
+            )
             Text("A/V sync:", color = Color(0xFFD9E2EC))
             var offsetText by rememberSaveable { mutableStateOf("0") }
             androidx.compose.material3.OutlinedTextField(

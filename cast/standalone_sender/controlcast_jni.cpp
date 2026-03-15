@@ -47,6 +47,7 @@ struct ControllerState {
   std::string video_path;
   bool use_hw_encode = true;
   long long av_sync_offset_ms = 0;
+  int playout_delay_ms = 400;
   std::string status = "Native backend ready.";
 
 #ifdef HAVE_OPENSCREEN
@@ -187,10 +188,13 @@ void StartCastSession(ControllerState& state,
 
         settings.av_sync_offset =
             std::chrono::milliseconds(state.av_sync_offset_ms);
+        settings.playout_delay =
+            std::chrono::milliseconds(state.playout_delay_ms);
 
-        LOGI("TaskRunner: connecting to port %d with file=%s avsync=%lldms",
-             endpoint.port, video_path.c_str(),
-             (long long)state.av_sync_offset_ms);
+        LOGI("TaskRunner: connecting buf=%dms avsync=%lldms file=%s",
+             state.playout_delay_ms,
+             (long long)state.av_sync_offset_ms,
+             video_path.c_str());
         state.agent->Connect(std::move(settings));
 
         {
@@ -509,6 +513,18 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeSetHwEncode(
   std::lock_guard<std::mutex> lock(state.mutex);
   state.use_hw_encode = enabled == JNI_TRUE;
   LOGI("Hardware encoding %s", state.use_hw_encode ? "enabled" : "disabled");
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_org_openscreen_controlcast_NativeBackedBackend_nativeSetPlayoutDelay(
+    JNIEnv* env,
+    jobject thiz,
+    jint delay_ms) {
+  auto& state = State();
+  std::lock_guard<std::mutex> lock(state.mutex);
+  state.playout_delay_ms = std::max(100, (int)delay_ms);
+  LOGI("Playout delay set to %d ms (takes effect on next session)",
+       state.playout_delay_ms);
 }
 
 extern "C" JNIEXPORT void JNICALL
