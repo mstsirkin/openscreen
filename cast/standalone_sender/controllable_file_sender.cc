@@ -95,8 +95,9 @@ void ControllableFileSender::Stop() {
 }
 
 void ControllableFileSender::SeekTo(Clock::duration position) {
+  bool was_playing = is_playing_;
   last_known_position_ = ClampPosition(position);
-  if (is_playing_) {
+  if (was_playing) {
     StartPlaybackAt(last_known_position_);
   }
 }
@@ -172,9 +173,10 @@ void ControllableFileSender::StartPlaybackAt(Clock::duration position) {
     return;
   }
 
-  // Wait 500ms before starting to give time for in-flight frames
-  // from before pause to be ACK'd by the receiver.
-  playback_start_time_ = env_.now() + milliseconds(500);
+  // Wait for the playout delay duration before starting — this gives
+  // time for in-flight frames from before pause to be ACK'd, and
+  // matches the receiver's buffer size.
+  playback_start_time_ = env_.now() + settings_.playout_delay;
 
 
   num_capturers_running_ = 2;
