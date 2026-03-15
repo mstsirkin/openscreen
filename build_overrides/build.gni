@@ -17,6 +17,9 @@ build_with_chromium = false
 # `use_custom_libcxx = true`.
 enable_safe_libcxx = true
 
+# Not building Java targets in standalone OpenScreen.
+enable_java_templates = false
+
 declare_args() {
   # Allows googletest to pretty-print various absl types.  Disabled for nacl due
   # to lack of toolchain support.

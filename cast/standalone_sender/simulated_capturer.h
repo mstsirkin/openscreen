@@ -47,6 +47,7 @@ class SimulatedCapturer {
                     const char* path,
                     AVMediaType media_type,
                     Clock::time_point start_time,
+                    Clock::duration start_media_time,
                     Observer& observer);
 
   virtual ~SimulatedCapturer();
@@ -95,6 +96,7 @@ class SimulatedCapturer {
   ClockNowFunctionPtr now_;
   const AVMediaType media_type_;  // Audio or Video.
   const Clock::time_point start_time_;
+  const Clock::duration start_media_time_;
   Observer& observer_;
   const AVPacketUniquePtr packet_;        // Decoder input buffer.
   const AVFrameUniquePtr decoded_frame_;  // Decoder output frame.
@@ -145,6 +147,7 @@ class SimulatedAudioCapturer final : public SimulatedCapturer {
                          int num_channels,
                          int sample_rate,
                          Clock::time_point start_time,
+                         Clock::duration start_media_time,
                          Client& client);
 
   ~SimulatedAudioCapturer() final;
@@ -206,6 +209,7 @@ class SimulatedVideoCapturer final : public SimulatedCapturer {
   SimulatedVideoCapturer(Environment& environment,
                          const char* path,
                          Clock::time_point start_time,
+                         Clock::duration start_media_time,
                          Client& client);
 
   ~SimulatedVideoCapturer() final;

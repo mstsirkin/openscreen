@@ -31,11 +31,13 @@ SimulatedCapturer::SimulatedCapturer(Environment& environment,
                                      const char* path,
                                      AVMediaType media_type,
                                      Clock::time_point start_time,
+                                     Clock::duration start_media_time,
                                      Observer& observer)
     : format_context_(MakeUniqueAVFormatContext(path)),
       now_(environment.now_function()),
       media_type_(media_type),
       start_time_(start_time),
+      start_media_time_(std::max(start_media_time, Clock::duration::zero())),
       observer_(observer),
       packet_(MakeUniqueAVPacket()),
       decoded_frame_(MakeUniqueAVFrame()),
@@ -83,6 +85,22 @@ SimulatedCapturer::SimulatedCapturer(Environment& environment,
   if (open_result < 0) {
     OnError("avcodec_open2", open_result);
     return;  // Capturer is halted (unable to start).
+  }
+
+  if (start_media_time_ > Clock::duration::zero()) {
+    const AVRational time_base = format_context_->streams[stream_index_]->time_base;
+    const int64_t seek_target = av_rescale_q(
+        start_media_time_.count(),
+        AVRational{Clock::duration::period::num, Clock::duration::period::den},
+        time_base);
+    const int seek_result =
+        av_seek_frame(format_context_.get(), stream_index_, seek_target,
+                      AVSEEK_FLAG_BACKWARD);
+    if (seek_result < 0) {
+      OnError("av_seek_frame", seek_result);
+      return;
+    }
+    avcodec_flush_buffers(decoder_context_.get());
   }
 
   next_task_.Schedule([this] { StartDecodingNextFrame(); },
@@ -200,6 +218,12 @@ void SimulatedCapturer::ConsumeNextDecodedFrame() {
   const Clock::duration frame_timestamp = ToApproximateClockDuration(
       decoded_frame_->best_effort_timestamp,
       format_context_->streams[stream_index_]->time_base);
+  if (frame_timestamp < start_media_time_) {
+    av_frame_unref(decoded_frame_.get());
+    next_task_.Schedule([this] { ConsumeNextDecodedFrame(); },
+                        Alarm::kImmediately);
+    return;
+  }
   if (last_frame_timestamp_) {
     const Clock::duration delta = frame_timestamp - *last_frame_timestamp_;
     if (delta <= Clock::duration::zero()) {
@@ -218,7 +242,8 @@ void SimulatedCapturer::ConsumeNextDecodedFrame() {
   }
   last_frame_timestamp_ = frame_timestamp;
 
-  Clock::time_point reference_time = start_time_ + frame_timestamp;
+  Clock::time_point reference_time =
+      start_time_ + (frame_timestamp - start_media_time_);
   const auto delay_adjustment_or_null = ProcessDecodedFrame(*decoded_frame_);
   if (!delay_adjustment_or_null) {
     av_frame_unref(decoded_frame_.get());
@@ -244,11 +269,13 @@ SimulatedAudioCapturer::SimulatedAudioCapturer(Environment& environment,
                                                int num_channels,
                                                int sample_rate,
                                                Clock::time_point start_time,
+                                               Clock::duration start_media_time,
                                                Client& client)
     : SimulatedCapturer(environment,
                         path,
                         AVMEDIA_TYPE_AUDIO,
                         start_time,
+                        start_media_time,
                         client),
       num_channels_(num_channels),
       sample_rate_(sample_rate),
@@ -379,11 +406,13 @@ SimulatedVideoCapturer::Client::~Client() = default;
 SimulatedVideoCapturer::SimulatedVideoCapturer(Environment& environment,
                                                const char* path,
                                                Clock::time_point start_time,
+                                               Clock::duration start_media_time,
                                                Client& client)
     : SimulatedCapturer(environment,
                         path,
                         AVMEDIA_TYPE_VIDEO,
                         start_time,
+                        start_media_time,
                         client),
       client_(client) {}
 

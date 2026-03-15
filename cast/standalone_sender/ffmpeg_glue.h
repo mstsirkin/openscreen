@@ -15,11 +15,14 @@ extern "C" {
 #include <libavutil/pixfmt.h>
 #include <libavutil/samplefmt.h>
 #include <libswresample/swresample.h>
+#include <libswscale/swscale.h>
 }
 
 #include <memory>
 #include <string>
 #include <utility>
+
+#include "platform/api/time.h"
 
 namespace openscreen::cast {
 
@@ -70,6 +73,9 @@ DEFINE_AV_UNIQUE_PTR(SwrContext, swr_alloc, swr_free)
 // TODO(issuetracker.google.com/224642520): dedup with standalone
 // receiver.
 std::string AvErrorToString(int error_num);
+
+// Returns the media duration for a file, or zero if it cannot be determined.
+Clock::duration GetMediaDuration(const char* path);
 
 // Macros to enable backwards compability codepaths for older versions of
 // ffmpeg, where newer versions have deprecated APIs.  Note that ffmpeg defines

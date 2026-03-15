@@ -163,6 +163,11 @@ class StreamingVpxEncoder : public StreamingVideoEncoder {
 
   // libvpx VP8/9 encoder instance. Only the encode thread accesses this.
   vpx_codec_ctx_t encoder_;
+
+  // Shared flag used to detect when the encoder has been destroyed.
+  // The encode thread captures a weak_ptr in posted tasks; if the
+  // shared_ptr is gone (encoder destroyed), the task is a no-op.
+  std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
 };
 
 }  // namespace cast

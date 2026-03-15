@@ -239,8 +239,10 @@ void StreamingVpxEncoder::ProcessWorkUnitsUntilTimeToQuit() {
                             work_unit);
     UpdateSpeedSettingForNextFrame(work_unit.stats);
 
+    std::weak_ptr<bool> weak_alive = alive_;
     main_task_runner_.PostTask(
-        [this, results = std::move(work_unit)]() mutable {
+        [this, weak_alive, results = std::move(work_unit)]() mutable {
+          if (weak_alive.expired()) return;
           SendEncodedFrame(std::move(results));
         });
   }
