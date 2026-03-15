@@ -46,6 +46,7 @@ void ControllableFileCastAgent::Connect(ConnectionSettings settings) {
                           ? DeviceMediaPolicy::kIncludesVideo
                           : DeviceMediaPolicy::kAudioOnly;
   task_runner_.PostTask([this, policy] {
+    if (!connection_settings_) return;
     socket_factory_.Connect(connection_settings_->receiver_endpoint, policy,
                             &router_);
   });

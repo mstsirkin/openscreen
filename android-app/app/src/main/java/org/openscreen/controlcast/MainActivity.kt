@@ -492,7 +492,9 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             onSliderChange = {
                 sliderDragging = true; sliderValue = it; positionMs = (durationMs * it).toLong()
                 val now = System.currentTimeMillis()
-                if (now - lastSeekMs > 200) { lastSeekMs = now; backend.seekTo(positionMs) }
+                if (now - lastSeekMs > 200) {
+                    lastSeekMs = now; exoPlayer.seekTo(positionMs); backend.seekTo(positionMs)
+                }
             },
             onSliderFinished = { sliderDragging = false; exoPlayer.seekTo(positionMs); backend.seekTo(positionMs) },
             sliderEnabled = durationMs > 0L,
@@ -779,10 +781,11 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                     sliderDragging = true
                     sliderValue = it
                     positionMs = (durationMs * it).toLong()
-                    // Throttled seek to Cast during drag for live preview
+                    // Throttled seek to both local and Cast during drag
                     val now = System.currentTimeMillis()
                     if (now - lastSeekMs > 200) {
                         lastSeekMs = now
+                        exoPlayer.seekTo(positionMs)
                         backend.seekTo(positionMs)
                     }
                 },
