@@ -369,6 +369,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var sliderValue by remember { mutableFloatStateOf(0f) }
     var sliderDragging by remember { mutableStateOf(false) }
     var lastSeekMs by remember { mutableLongStateOf(0L) }
+    var restored by remember { mutableStateOf(false) }
     var connectedDevice by rememberSaveable { mutableStateOf<String?>(null) }
     var isFullscreen by rememberSaveable { mutableStateOf(false) }
     var autoReconnectTargets by remember {
@@ -428,6 +429,9 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
 
     // Restore video after rotation (ExoPlayer is recreated but URI/position are saved)
     LaunchedEffect(exoPlayer, selectedUri) {
+        if (selectedUri == null) {
+            restored = true
+        }
         selectedUri?.let { uri ->
             if (exoPlayer.mediaItemCount == 0) {
                 exoPlayer.setMediaItem(MediaItem.fromUri(uri))
@@ -438,6 +442,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 }
                 if (isPlaying) exoPlayer.play()
                 exoPlayer.volume = if (localSoundEnabled) 1f else 0f
+                restored = true
             }
         }
     }
@@ -445,7 +450,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     LaunchedEffect(exoPlayer) {
         while (true) {
             durationMs = exoPlayer.duration.coerceAtLeast(0L)
-            if (!sliderDragging) {
+            if (!sliderDragging && restored) {
                 positionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
                 sliderValue = if (durationMs > 0L) {
                     positionMs.toFloat() / durationMs.toFloat()
