@@ -97,6 +97,13 @@ void ControllableFileCastAgent::ResetViewport() {
   }
 }
 
+Clock::duration ControllableFileCastAgent::GetCurrentPosition() const {
+  if (sender_) {
+    return sender_->GetCurrentPosition();
+  }
+  return desired_position_;
+}
+
 void ControllableFileCastAgent::SetAvSyncOffset(Clock::duration offset) {
   if (sender_) {
     sender_->SetAvSyncOffset(offset);

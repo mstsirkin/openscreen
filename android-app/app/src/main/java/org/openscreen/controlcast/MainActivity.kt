@@ -72,6 +72,22 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    // Saved across rotation via onSaveInstanceState
+    var savedPosition = 0L
+    var savedPlaying = false
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putLong("cast_position", savedPosition)
+        outState.putBoolean("cast_playing", savedPlaying)
+    }
+
+    override fun onRestoreInstanceState(savedInstanceState: Bundle) {
+        super.onRestoreInstanceState(savedInstanceState)
+        savedPosition = savedInstanceState.getLong("cast_position", 0L)
+        savedPlaying = savedInstanceState.getBoolean("cast_playing", false)
+    }
+
     private val permissionLauncher = registerForActivityResult(
         RequestMultiplePermissions()
     ) { /* permissions granted or denied, user retaps Calibrate */ }
@@ -244,6 +260,8 @@ class NativeBackedBackend : CastControlBackend {
         nativeSetPlayoutDelay(delayMs)
     }
 
+    fun getCastPositionMs(): Long = nativeGetPositionMs()
+
     fun setAvSyncOffset(offsetMs: Long) {
         nativeSetAvSyncOffset(offsetMs)
         refreshStatus()
@@ -275,6 +293,7 @@ class NativeBackedBackend : CastControlBackend {
     private external fun nativeSetMirrorLocally(enabled: Boolean)
     private external fun nativeGetStatus(): String
     private external fun nativeSetPlayoutDelay(delayMs: Int)
+    private external fun nativeGetPositionMs(): Long
     private external fun nativeSetAvSyncOffset(offsetMs: Long)
     private external fun nativeSetHwEncode(enabled: Boolean)
     private external fun nativeTestCast(target: String, filePath: String)
@@ -392,7 +411,16 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     }
 
     DisposableEffect(exoPlayer) {
-        onDispose { exoPlayer.release() }
+        onDispose {
+            // Save to activity fields — these survive between
+            // onSaveInstanceState and recreation, unlike rememberSaveable
+            // which is captured before onDispose runs.
+            (context as? MainActivity)?.let {
+                it.savedPlaying = exoPlayer.isPlaying
+                it.savedPosition = exoPlayer.currentPosition.coerceAtLeast(0L)
+            }
+            exoPlayer.release()
+        }
     }
 
     DisposableEffect(discovery) {
@@ -443,10 +471,18 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                     delay(50)
                 }
                 durationMs = exoPlayer.duration.coerceAtLeast(0L)
+                // Get position from Cast if running, else use saved
+                val castPos = backend.getCastPositionMs()
+                if (castPos > 0) positionMs = castPos
                 exoPlayer.seekTo(positionMs)
                 sliderValue = if (durationMs > 0L) positionMs.toFloat() / durationMs.toFloat() else 0f
                 exoPlayer.volume = if (localSoundEnabled) 1f else 0f
-                if (isPlaying) exoPlayer.play()
+                // Use activity-saved play state (set in onDispose, before rememberSaveable snapshot)
+                val wasPlaying = (context as? MainActivity)?.savedPlaying ?: isPlaying
+                if (wasPlaying) {
+                    exoPlayer.play()
+                    isPlaying = true
+                }
                 restored = true
             }
         }

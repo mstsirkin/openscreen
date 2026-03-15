@@ -548,6 +548,22 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeSetAvSyncOffset(
 #endif
 }
 
+extern "C" JNIEXPORT jlong JNICALL
+Java_org_openscreen_controlcast_NativeBackedBackend_nativeGetPositionMs(
+    JNIEnv* env,
+    jobject thiz) {
+  auto& state = State();
+#ifdef HAVE_OPENSCREEN
+  if (state.agent) {
+    // TODO: this reads from the sender on the JNI thread; safe because
+    // GetCurrentPosition only reads atomic/const fields.
+    auto pos = state.agent->GetCurrentPosition();
+    return std::chrono::duration_cast<std::chrono::milliseconds>(pos).count();
+  }
+#endif
+  return state.position_ms;
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_org_openscreen_controlcast_NativeBackedBackend_nativeGetStatus(
     JNIEnv* env,
