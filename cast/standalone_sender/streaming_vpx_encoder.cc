@@ -151,6 +151,13 @@ void StreamingVpxEncoder::EncodeAndSend(
       sender_->GetMaxInFlightMediaDuration()) {
     OSP_LOG_WARN << "VIDEO[" << sender_->ssrc()
                  << "] Dropping: In-flight media duration would be too high.";
+    // Re-sync the media timeline so that the next frame after the drop period
+    // doesn't have a huge RTP timestamp gap. Without this, the growing gap
+    // keeps the in-flight duration artificially high, causing more drops and
+    // preventing the stream from ever catching up.
+    start_time_ = reference_time -
+        last_enqueued_rtp_timestamp_.ToTimeSinceOrigin<Clock::duration>(
+            sender_->rtp_timebase());
     return;
   }
 
