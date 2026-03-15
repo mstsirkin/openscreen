@@ -632,81 +632,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             }
         }
 
-        // Buffer size and A/V sync
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text("Buffer:", color = Color(0xFFD9E2EC))
-            var bufferText by rememberSaveable { mutableStateOf("400") }
-            androidx.compose.material3.OutlinedTextField(
-                value = bufferText,
-                onValueChange = { new ->
-                    bufferText = new.filter { it.isDigit() }
-                    bufferText.toIntOrNull()?.let { backend.setPlayoutDelay(it) }
-                },
-                modifier = Modifier.width(70.dp),
-                textStyle = androidx.compose.ui.text.TextStyle(
-                    color = Color(0xFFD9E2EC),
-                    fontSize = 14.sp,
-                ),
-                singleLine = true,
-                suffix = { Text("ms", color = Color(0xFF6B7F8E)) },
-            )
-            Text("A/V sync:", color = Color(0xFFD9E2EC))
-            var offsetText by rememberSaveable { mutableStateOf("0") }
-            androidx.compose.material3.OutlinedTextField(
-                value = offsetText,
-                onValueChange = { new ->
-                    offsetText = new.filter { it.isDigit() || it == '-' }
-                    offsetText.toLongOrNull()?.let { backend.setAvSyncOffset(it) }
-                },
-                modifier = Modifier.width(80.dp),
-                textStyle = androidx.compose.ui.text.TextStyle(
-                    color = Color(0xFFD9E2EC),
-                    fontSize = 14.sp,
-                ),
-                singleLine = true,
-                suffix = { Text("ms", color = Color(0xFF6B7F8E)) },
-            )
-            val activity = context as? MainActivity
-            var calibrating by remember { mutableStateOf(false) }
-            Button(
-                onClick = {
-                    if (activity == null) return@Button
-                    val calibrator = AvSyncCalibrator(context)
-                    if (!calibrator.hasPermissions()) {
-                        activity.requestCalibrationPermissions()
-                        return@Button
-                    }
-                    calibrating = true
-                    // Extract bundled sync test video to cache
-                    val syncFile = java.io.File(context.cacheDir, "sync_test.mp4")
-                    if (!syncFile.exists()) {
-                        context.resources.openRawResource(R.raw.sync_test).use { input ->
-                            syncFile.outputStream().use { output -> input.copyTo(output) }
-                        }
-                    }
-                    val target = connectedDevice?.let {
-                        discoveredDevices.firstOrNull { d -> d.name == it }?.target
-                    } ?: ""
-                    backend.testCast(target, syncFile.absolutePath)
-                    coroutineScope.launch {
-                        delay(3000)
-                        val result = calibrator.calibrate(activity)
-                        calibrating = false
-                        Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
-                        if (result.numSamples > 0) {
-                            offsetText = result.offsetMs.toString()
-                            backend.setAvSyncOffset(result.offsetMs)
-                        }
-                    }
-                },
-                enabled = !calibrating,
-            ) {
-                Text(if (calibrating) "..." else "Calibrate")
-            }
-        }
+        SettingsRow(context, backend, discoveredDevices, connectedDevice, coroutineScope)
 
         if (localMirrorEnabled) {
             Box(
@@ -787,6 +713,89 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 Text(formatTime(positionMs), color = Color(0xFFD9E2EC))
                 Text(formatTime(durationMs), color = Color(0xFFD9E2EC))
             }
+        }
+    }
+}
+
+@Composable
+private fun SettingsRow(
+    context: Context,
+    backend: NativeBackedBackend,
+    discoveredDevices: List<CastDevice>,
+    connectedDevice: String?,
+    coroutineScope: kotlinx.coroutines.CoroutineScope,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Buffer:", color = Color(0xFFD9E2EC))
+        var bufferText by rememberSaveable { mutableStateOf("400") }
+        androidx.compose.material3.OutlinedTextField(
+            value = bufferText,
+            onValueChange = { new ->
+                bufferText = new.filter { it.isDigit() }
+                bufferText.toIntOrNull()?.let { backend.setPlayoutDelay(it) }
+            },
+            modifier = Modifier.width(70.dp),
+            textStyle = androidx.compose.ui.text.TextStyle(
+                color = Color(0xFFD9E2EC),
+                fontSize = 14.sp,
+            ),
+            singleLine = true,
+            suffix = { Text("ms", color = Color(0xFF6B7F8E)) },
+        )
+        Text("A/V:", color = Color(0xFFD9E2EC))
+        var offsetText by rememberSaveable { mutableStateOf("0") }
+        androidx.compose.material3.OutlinedTextField(
+            value = offsetText,
+            onValueChange = { new ->
+                offsetText = new.filter { it.isDigit() || it == '-' }
+                offsetText.toLongOrNull()?.let { backend.setAvSyncOffset(it) }
+            },
+            modifier = Modifier.width(70.dp),
+            textStyle = androidx.compose.ui.text.TextStyle(
+                color = Color(0xFFD9E2EC),
+                fontSize = 14.sp,
+            ),
+            singleLine = true,
+            suffix = { Text("ms", color = Color(0xFF6B7F8E)) },
+        )
+        val activity = context as? MainActivity
+        var calibrating by remember { mutableStateOf(false) }
+        Button(
+            onClick = {
+                if (activity == null) return@Button
+                val calibrator = AvSyncCalibrator(context)
+                if (!calibrator.hasPermissions()) {
+                    activity.requestCalibrationPermissions()
+                    return@Button
+                }
+                calibrating = true
+                val syncFile = java.io.File(context.cacheDir, "sync_test.mp4")
+                if (!syncFile.exists()) {
+                    context.resources.openRawResource(R.raw.sync_test).use { input ->
+                        syncFile.outputStream().use { output -> input.copyTo(output) }
+                    }
+                }
+                val target = connectedDevice?.let {
+                    discoveredDevices.firstOrNull { d -> d.name == it }?.target
+                } ?: ""
+                backend.testCast(target, syncFile.absolutePath)
+                coroutineScope.launch {
+                    delay(3000)
+                    val result = calibrator.calibrate(activity)
+                    calibrating = false
+                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                    if (result.numSamples > 0) {
+                        offsetText = result.offsetMs.toString()
+                        backend.setAvSyncOffset(result.offsetMs)
+                    }
+                }
+            },
+            enabled = !calibrating,
+        ) {
+            Text(if (calibrating) "..." else "Cal")
         }
     }
 }
