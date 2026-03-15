@@ -368,6 +368,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var viewport by remember { mutableStateOf(ViewportState()) }
     var sliderValue by remember { mutableFloatStateOf(0f) }
     var sliderDragging by remember { mutableStateOf(false) }
+    var lastSeekMs by remember { mutableLongStateOf(0L) }
     var connectedDevice by rememberSaveable { mutableStateOf<String?>(null) }
     var isFullscreen by rememberSaveable { mutableStateOf(false) }
     var autoReconnectTargets by remember {
@@ -485,7 +486,11 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 } catch (_: Exception) {}
             },
             sliderValue = sliderValue,
-            onSliderChange = { sliderDragging = true; sliderValue = it; positionMs = (durationMs * it).toLong() },
+            onSliderChange = {
+                sliderDragging = true; sliderValue = it; positionMs = (durationMs * it).toLong()
+                val now = System.currentTimeMillis()
+                if (now - lastSeekMs > 200) { lastSeekMs = now; backend.seekTo(positionMs) }
+            },
             onSliderFinished = { sliderDragging = false; exoPlayer.seekTo(positionMs); backend.seekTo(positionMs) },
             sliderEnabled = durationMs > 0L,
             positionMs = positionMs,
@@ -771,6 +776,12 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                     sliderDragging = true
                     sliderValue = it
                     positionMs = (durationMs * it).toLong()
+                    // Throttled seek to Cast during drag for live preview
+                    val now = System.currentTimeMillis()
+                    if (now - lastSeekMs > 200) {
+                        lastSeekMs = now
+                        backend.seekTo(positionMs)
+                    }
                 },
                 onValueChangeFinished = {
                     sliderDragging = false
