@@ -364,7 +364,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var localSoundEnabled by rememberSaveable { mutableStateOf(false) }
     var isPlaying by rememberSaveable { mutableStateOf(false) }
     var durationMs by remember { mutableLongStateOf(0L) }
-    var positionMs by remember { mutableLongStateOf(0L) }
+    var positionMs by rememberSaveable { mutableLongStateOf(0L) }
     var viewport by remember { mutableStateOf(ViewportState()) }
     var sliderValue by remember { mutableFloatStateOf(0f) }
     var sliderDragging by remember { mutableStateOf(false) }
@@ -425,12 +425,15 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         }
     }
 
-    // Restore video after rotation (ExoPlayer is recreated but URI is saved)
+    // Restore video after rotation (ExoPlayer is recreated but URI/position are saved)
     LaunchedEffect(exoPlayer, selectedUri) {
         selectedUri?.let { uri ->
             if (exoPlayer.mediaItemCount == 0) {
                 exoPlayer.setMediaItem(MediaItem.fromUri(uri))
                 exoPlayer.prepare()
+                if (positionMs > 0) exoPlayer.seekTo(positionMs)
+                if (isPlaying) exoPlayer.play()
+                exoPlayer.volume = if (localSoundEnabled) 1f else 0f
             }
         }
     }
