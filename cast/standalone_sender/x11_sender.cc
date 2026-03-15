@@ -66,6 +66,7 @@ X11Sender::X11Sender(Environment& environment,
   // Start audio capturer (48kHz stereo)
   audio_capturer_ = std::make_unique<PulseCapturer>(
       env_, audio_encoder_.num_channels(), audio_encoder_.sample_rate(),
+      settings_.pulse_source,
       [this](const float* samples, int num_samples,
              Clock::time_point begin, Clock::time_point end,
              Clock::time_point ref) {

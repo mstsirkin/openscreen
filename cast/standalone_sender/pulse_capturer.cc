@@ -15,10 +15,12 @@
 namespace openscreen::cast {
 
 PulseCapturer::PulseCapturer(Environment& env, int num_channels,
-                             int sample_rate, AudioCallback callback)
+                             int sample_rate, std::string pulse_source,
+                             AudioCallback callback)
     : env_(env),
       num_channels_(num_channels),
       sample_rate_(sample_rate),
+      pulse_source_(std::move(pulse_source)),
       callback_(std::move(callback)) {
   thread_ = std::thread(&PulseCapturer::CaptureThread, this);
 }
@@ -38,22 +40,22 @@ void PulseCapturer::CaptureThread() {
   spec.rate = static_cast<uint32_t>(sample_rate_);
 
   int error = 0;
-  // Find the monitor source for the default sink.
-  // The monitor source name is the default sink name + ".monitor".
-  // This captures system audio output, not the microphone.
-  std::string monitor_source;
-  FILE* fp = popen("pactl get-default-sink 2>/dev/null", "r");
-  if (fp) {
-    char buf[256];
-    if (fgets(buf, sizeof(buf), fp)) {
-      monitor_source = buf;
-      // Remove trailing newline
-      while (!monitor_source.empty() && monitor_source.back() == '\n') {
-        monitor_source.pop_back();
+  // Determine the PulseAudio source to capture from.
+  std::string monitor_source = pulse_source_;
+  if (monitor_source.empty()) {
+    // Default: monitor the default sink's output.
+    FILE* fp = popen("pactl get-default-sink 2>/dev/null", "r");
+    if (fp) {
+      char buf[256];
+      if (fgets(buf, sizeof(buf), fp)) {
+        monitor_source = buf;
+        while (!monitor_source.empty() && monitor_source.back() == '\n') {
+          monitor_source.pop_back();
+        }
+        monitor_source += ".monitor";
       }
-      monitor_source += ".monitor";
+      pclose(fp);
     }
-    pclose(fp);
   }
 
   const char* device = monitor_source.empty() ? nullptr

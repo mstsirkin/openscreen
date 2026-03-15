@@ -46,6 +46,9 @@ struct ConnectionSettings {
 
   // Whether DSCP support should be enabled for Quality of Service.
   bool enable_dscp = true;
+
+  // PulseAudio source to capture audio from. Empty means default sink monitor.
+  std::string pulse_source;
 };
 
 }  // namespace openscreen::cast

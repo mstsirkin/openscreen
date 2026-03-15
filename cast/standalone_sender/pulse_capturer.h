@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -27,8 +28,9 @@ class PulseCapturer {
                                            Clock::time_point capture_end,
                                            Clock::time_point reference_time)>;
 
+  // If pulse_source is empty, the default sink's monitor is used.
   PulseCapturer(Environment& env, int num_channels, int sample_rate,
-                AudioCallback callback);
+                std::string pulse_source, AudioCallback callback);
   ~PulseCapturer();
 
  private:
@@ -37,6 +39,7 @@ class PulseCapturer {
   Environment& env_;
   int num_channels_;
   int sample_rate_;
+  std::string pulse_source_;
   AudioCallback callback_;
   std::atomic<bool> running_{true};
   std::thread thread_;

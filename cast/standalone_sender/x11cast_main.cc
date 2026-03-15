@@ -42,6 +42,7 @@ void LogUsage(const char* argv0) {
             << "  -a    Use android RTP hack for older receivers\n"
             << "  -c <codec>  Video codec: vp8 (default), vp9\n"
             << "  -m <N>      Max bitrate (default: " << kDefaultMaxBitrate << ")\n"
+            << "  -s <source> PulseAudio source (e.g. x11cast.monitor)\n"
             << "  -w <id>     Capture window by X11 window ID (hex or decimal)\n"
             << "  -W          Pick window by clicking on it\n"
             << "  -v    Verbose logging\n"
@@ -67,10 +68,11 @@ int X11CastMain(int argc, char* argv[]) {
   bool android_hack = false;
   int max_bitrate = kDefaultMaxBitrate;
   VideoCodec codec = VideoCodec::kVp8;
+  std::string pulse_source;
   unsigned long window_id = 0;
 
   int opt;
-  while ((opt = getopt(argc, argv, "ac:m:w:Wvh")) != -1) {
+  while ((opt = getopt(argc, argv, "ac:m:s:w:Wvh")) != -1) {
     switch (opt) {
       case 'a': android_hack = true; break;
       case 'c':
@@ -83,6 +85,9 @@ int X11CastMain(int argc, char* argv[]) {
         break;
       case 'm':
         max_bitrate = atoi(optarg);
+        break;
+      case 's':
+        pulse_source = optarg;
         break;
       case 'w':
         window_id = strtoul(optarg, nullptr, 0);
@@ -165,6 +170,7 @@ int X11CastMain(int argc, char* argv[]) {
     settings.should_loop_video = false;
     settings.codec = codec;
     settings.enable_dscp = true;
+    settings.pulse_source = pulse_source;
 
     agent->Connect(std::move(settings), window_id);
   });

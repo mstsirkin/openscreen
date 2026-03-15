@@ -166,19 +166,28 @@ if (!build_with_chromium) {
 
       configs = [ "../common:certificate_config" ]
       public_configs = [ ":standalone_external_libs" ]
+      data_deps = [
+        ":x11cast_py",
+        ":x11castapp_py",
+      ]
     }
 
     copy("x11cast_py") {
       testonly = true
-      visibility += [ "../..:gn_all" ]
+      visibility += [
+        "../..:gn_all",
+        ":x11cast",
+      ]
       sources = [ "x11cast.py" ]
       outputs = [ "$root_out_dir/x11cast.py" ]
-      deps = [ ":x11cast" ]
     }
 
     copy("x11castapp_py") {
       testonly = true
-      visibility += [ "../..:gn_all" ]
+      visibility += [
+        "../..:gn_all",
+        ":x11cast",
+      ]
       sources = [ "x11castapp.py" ]
       outputs = [ "$root_out_dir/x11castapp.py" ]
       deps = [ ":x11cast" ]
