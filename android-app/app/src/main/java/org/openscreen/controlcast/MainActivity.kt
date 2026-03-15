@@ -452,11 +452,23 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         )
 
         // Device discovery section
-        Text(
-            text = "Cast devices",
-            color = Color(0xFFD9E2EC),
-            style = MaterialTheme.typography.titleMedium,
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = "Cast devices",
+                color = Color(0xFFD9E2EC),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f),
+            )
+            Button(onClick = {
+                discovery.stopDiscovery()
+                discovery.startDiscovery()
+            }) {
+                Text("Refresh")
+            }
+        }
 
         if (connectedDevice != null) {
             Row(
