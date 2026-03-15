@@ -266,6 +266,10 @@ void ControllableFileCastAgent::OnReceiverMessagingOpened(bool success) {
 }
 
 void ControllableFileCastAgent::CreateAndStartSession() {
+  if (!connection_settings_) {
+    Shutdown();
+    return;
+  }
   environment_ =
       std::make_unique<Environment>(&Clock::now, task_runner_, IPEndpoint{});
 
