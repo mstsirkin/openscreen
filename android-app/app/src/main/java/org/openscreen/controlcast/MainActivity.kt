@@ -18,6 +18,7 @@ import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -639,7 +640,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(320.dp)
-                    .background(Color.Black, RoundedCornerShape(24.dp))
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(Color.Black)
                     .pointerInput(Unit) {
                         detectTransformGestures { _, pan, zoom, _ ->
                             val newZoom = (viewport.zoom * zoom).coerceIn(1f, 8f)
