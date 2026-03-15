@@ -147,13 +147,13 @@ class AvSyncCalibrator(private val context: Context) {
             bufSize,
         )
 
-        @Volatile var running = true
+        val running = java.util.concurrent.atomic.AtomicBoolean(true)
         var cooldown = 0L
         val buffer = ShortArray(bufSize / 2)
 
         recorder.startRecording()
         Thread {
-            while (running) {
+            while (running.get()) {
                 val read = recorder.read(buffer, 0, buffer.size)
                 if (read > 0) {
                     val now = System.nanoTime()
@@ -176,7 +176,7 @@ class AvSyncCalibrator(private val context: Context) {
             recorder.release()
         }.start()
 
-        return StoppableJob { running = false }
+        return StoppableJob { running.set(false) }
     }
 
     private fun computeOffset(): CalibrationResult {

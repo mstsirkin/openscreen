@@ -88,6 +88,7 @@ class MainActivity : ComponentActivity() {
         bindProcessToWifi()
         val testTarget = intent?.getStringExtra("test_target")
         val testFile = intent?.getStringExtra("test_file")
+        val testCalibrate = intent?.getBooleanExtra("test_calibrate", false) == true
         enableEdgeToEdge()
         setContent {
             MaterialTheme {
@@ -95,7 +96,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = Color(0xFF101317),
                 ) {
-                    ControlCastApp(testTarget, testFile)
+                    ControlCastApp(testTarget, testFile, testCalibrate)
                 }
             }
         }
@@ -285,7 +286,7 @@ private fun setAutoReconnect(context: Context, target: String, enabled: Boolean)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ControlCastApp(testTarget: String? = null, testFile: String? = null) {
+private fun ControlCastApp(testTarget: String? = null, testFile: String? = null, testCalibrate: Boolean = false) {
     val context = LocalContext.current
     val backend = remember { NativeBackedBackend() }
 
@@ -293,11 +294,18 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null)
     // adb shell am start -n org.openscreen.controlcast/.MainActivity
     //   --es test_target "192.168.1.189:8009"
     //   --es test_file "/sdcard/DCIM/Camera/video.mp4"
-    LaunchedEffect(testTarget, testFile) {
+    // Auto-cast and optional auto-calibrate via adb intent extras:
+    //   --es test_target "192.168.1.189:8009"
+    //   --es test_file "/data/local/tmp/test.mp4"
+    //   --ez test_calibrate true
+    val activity = context as? MainActivity
+    LaunchedEffect(testTarget, testFile, testCalibrate) {
         if (!testTarget.isNullOrEmpty() && !testFile.isNullOrEmpty()) {
-            // Wait for the WiFi network binding callback to fire.
             delay(1000)
             backend.testCast(testTarget, testFile)
+        }
+        if (testCalibrate && activity != null) {
+            activity.requestCalibrationPermissions()
         }
     }
     val backendStatus by backend.status.collectAsStateWithLifecycle()
