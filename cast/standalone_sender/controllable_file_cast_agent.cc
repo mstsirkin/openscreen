@@ -104,6 +104,13 @@ Clock::duration ControllableFileCastAgent::GetCurrentPosition() const {
   return desired_position_;
 }
 
+bool ControllableFileCastAgent::IsPlaying() const {
+  if (sender_) {
+    return sender_->is_playing();
+  }
+  return !desired_paused_;
+}
+
 void ControllableFileCastAgent::SetAvSyncOffset(Clock::duration offset) {
   if (sender_) {
     sender_->SetAvSyncOffset(offset);

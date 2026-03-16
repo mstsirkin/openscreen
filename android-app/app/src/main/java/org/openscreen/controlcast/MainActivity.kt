@@ -261,6 +261,7 @@ class NativeBackedBackend : CastControlBackend {
     }
 
     fun getCastPositionMs(): Long = nativeGetPositionMs()
+    fun isCastPlaying(): Boolean = nativeIsPlaying()
 
     fun setAvSyncOffset(offsetMs: Long) {
         nativeSetAvSyncOffset(offsetMs)
@@ -294,6 +295,7 @@ class NativeBackedBackend : CastControlBackend {
     private external fun nativeGetStatus(): String
     private external fun nativeSetPlayoutDelay(delayMs: Int)
     private external fun nativeGetPositionMs(): Long
+    private external fun nativeIsPlaying(): Boolean
     private external fun nativeSetAvSyncOffset(offsetMs: Long)
     private external fun nativeSetHwEncode(enabled: Boolean)
     private external fun nativeTestCast(target: String, filePath: String)
@@ -477,9 +479,9 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 exoPlayer.seekTo(positionMs)
                 sliderValue = if (durationMs > 0L) positionMs.toFloat() / durationMs.toFloat() else 0f
                 exoPlayer.volume = if (localSoundEnabled) 1f else 0f
-                // Use activity-saved play state (set in onDispose, before rememberSaveable snapshot)
-                val wasPlaying = (context as? MainActivity)?.savedPlaying ?: isPlaying
-                if (wasPlaying) {
+                // Query Cast backend for play state — it survives rotation
+                val castPlaying = backend.isCastPlaying()
+                if (castPlaying) {
                     exoPlayer.play()
                     isPlaying = true
                 }
