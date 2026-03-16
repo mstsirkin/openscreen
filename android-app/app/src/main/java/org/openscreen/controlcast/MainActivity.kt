@@ -497,16 +497,27 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
 
     LaunchedEffect(exoPlayer) {
         while (true) {
-            durationMs = exoPlayer.duration.coerceAtLeast(0L)
+            if (exoPlayer.mediaItemCount > 0) {
+                durationMs = exoPlayer.duration.coerceAtLeast(0L)
+            }
             if (!sliderDragging && restored) {
-                positionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+                // Use ExoPlayer position if loaded, else Cast position
+                positionMs = if (exoPlayer.mediaItemCount > 0) {
+                    exoPlayer.currentPosition.coerceAtLeast(0L)
+                } else {
+                    backend.getCastPositionMs().coerceAtLeast(0L)
+                }
                 sliderValue = if (durationMs > 0L) {
                     positionMs.toFloat() / durationMs.toFloat()
                 } else {
                     0f
                 }
             }
-            isPlaying = exoPlayer.isPlaying
+            isPlaying = if (exoPlayer.mediaItemCount > 0) {
+                exoPlayer.isPlaying
+            } else {
+                backend.isCastPlaying()
+            }
             delay(200)
         }
     }
