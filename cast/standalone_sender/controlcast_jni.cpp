@@ -563,6 +563,20 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeIsPlaying(
 }
 
 extern "C" JNIEXPORT jlong JNICALL
+Java_org_openscreen_controlcast_NativeBackedBackend_nativeGetDurationMs(
+    JNIEnv* env,
+    jobject thiz) {
+  auto& state = State();
+#ifdef HAVE_OPENSCREEN
+  if (state.agent) {
+    auto dur = state.agent->GetDuration();
+    return std::chrono::duration_cast<std::chrono::milliseconds>(dur).count();
+  }
+#endif
+  return 0;
+}
+
+extern "C" JNIEXPORT jlong JNICALL
 Java_org_openscreen_controlcast_NativeBackedBackend_nativeGetPositionMs(
     JNIEnv* env,
     jobject thiz) {

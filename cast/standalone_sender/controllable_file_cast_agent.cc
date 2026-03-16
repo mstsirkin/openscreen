@@ -104,6 +104,13 @@ Clock::duration ControllableFileCastAgent::GetCurrentPosition() const {
   return desired_position_;
 }
 
+Clock::duration ControllableFileCastAgent::GetDuration() const {
+  if (sender_) {
+    return sender_->GetDuration();
+  }
+  return Clock::duration::zero();
+}
+
 bool ControllableFileCastAgent::IsPlaying() const {
   if (sender_) {
     return sender_->is_playing();

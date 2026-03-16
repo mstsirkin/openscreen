@@ -261,6 +261,7 @@ class NativeBackedBackend : CastControlBackend {
     }
 
     fun getCastPositionMs(): Long = nativeGetPositionMs()
+    fun getCastDurationMs(): Long = nativeGetDurationMs()
     fun isCastPlaying(): Boolean = nativeIsPlaying()
 
     fun setAvSyncOffset(offsetMs: Long) {
@@ -295,6 +296,7 @@ class NativeBackedBackend : CastControlBackend {
     private external fun nativeGetStatus(): String
     private external fun nativeSetPlayoutDelay(delayMs: Int)
     private external fun nativeGetPositionMs(): Long
+    private external fun nativeGetDurationMs(): Long
     private external fun nativeIsPlaying(): Boolean
     private external fun nativeSetAvSyncOffset(offsetMs: Long)
     private external fun nativeSetHwEncode(enabled: Boolean)
@@ -497,8 +499,10 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
 
     LaunchedEffect(exoPlayer) {
         while (true) {
-            if (exoPlayer.mediaItemCount > 0) {
-                durationMs = exoPlayer.duration.coerceAtLeast(0L)
+            durationMs = if (exoPlayer.mediaItemCount > 0) {
+                exoPlayer.duration.coerceAtLeast(0L)
+            } else {
+                backend.getCastDurationMs().coerceAtLeast(0L)
             }
             if (!sliderDragging && restored) {
                 // Use ExoPlayer position if loaded, else Cast position
