@@ -108,6 +108,7 @@ class MainActivity : ComponentActivity() {
         val testTarget = intent?.getStringExtra("test_target")
         val testFile = intent?.getStringExtra("test_file")
         val testCalibrate = intent?.getBooleanExtra("test_calibrate", false) == true
+        val testFullscreen = intent?.getBooleanExtra("test_fullscreen", false) == true
         // Handle shared video from Gallery or other apps
         val sharedUri = when (intent?.action) {
             android.content.Intent.ACTION_SEND ->
@@ -122,7 +123,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = Color(0xFF101317),
                 ) {
-                    ControlCastApp(testTarget, testFile, testCalibrate, sharedUri)
+                    ControlCastApp(testTarget, testFile, testCalibrate, sharedUri, testFullscreen)
                 }
             }
         }
@@ -324,7 +325,7 @@ private fun setAutoReconnect(context: Context, target: String, enabled: Boolean)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ControlCastApp(testTarget: String? = null, testFile: String? = null, testCalibrate: Boolean = false, sharedUri: Uri? = null) {
+private fun ControlCastApp(testTarget: String? = null, testFile: String? = null, testCalibrate: Boolean = false, sharedUri: Uri? = null, testFullscreen: Boolean = false) {
     val context = LocalContext.current
     val backend = remember { NativeBackedBackend() }
 
@@ -400,7 +401,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var connectedDevice by rememberSaveable { mutableStateOf<String?>(null) }
     val prefs = remember { context.getSharedPreferences("cast_ui", Context.MODE_PRIVATE) }
     var isFullscreen by rememberSaveable {
-        mutableStateOf(prefs.getBoolean("fullscreen", false))
+        mutableStateOf(testFullscreen || prefs.getBoolean("fullscreen", false))
     }
     var autoReconnectTargets by remember {
         mutableStateOf(getAutoReconnectTargets(context))
@@ -422,7 +423,13 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     // Load test file into ExoPlayer for local preview + slider
     LaunchedEffect(testFile, exoPlayer) {
         if (!testFile.isNullOrEmpty() && exoPlayer.mediaItemCount == 0) {
-            val fileUri = Uri.fromFile(java.io.File(testFile))
+            // Copy to cache dir — ExoPlayer can't access /data/local/tmp/
+            val src = java.io.File(testFile)
+            val cached = java.io.File(context.cacheDir, src.name)
+            if (src.canRead()) {
+                src.inputStream().use { i -> cached.outputStream().use { o -> i.copyTo(o) } }
+            }
+            val fileUri = Uri.fromFile(if (cached.exists()) cached else src)
             selectedUri = fileUri
             exoPlayer.setMediaItem(MediaItem.fromUri(fileUri))
             exoPlayer.prepare()
