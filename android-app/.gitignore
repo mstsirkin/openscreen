@@ -1,0 +1,3 @@
+app/src/main/jniLibs/
+app/build/
+.gradle/
