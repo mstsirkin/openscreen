@@ -419,6 +419,19 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         }
     }
 
+    // Load test file into ExoPlayer for local preview + slider
+    LaunchedEffect(testFile, exoPlayer) {
+        if (!testFile.isNullOrEmpty() && exoPlayer.mediaItemCount == 0) {
+            val fileUri = Uri.fromFile(java.io.File(testFile))
+            selectedUri = fileUri
+            exoPlayer.setMediaItem(MediaItem.fromUri(fileUri))
+            exoPlayer.prepare()
+            exoPlayer.volume = if (localSoundEnabled) 1f else 0f
+            exoPlayer.play()
+            isPlaying = true
+        }
+    }
+
     DisposableEffect(exoPlayer) {
         onDispose {
             // Save to activity fields — these survive between
