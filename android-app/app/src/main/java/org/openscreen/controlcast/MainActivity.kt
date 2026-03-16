@@ -392,7 +392,9 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     }
     var sliderDragging by remember { mutableStateOf(false) }
     var lastSeekMs by remember { mutableLongStateOf(0L) }
-    var restored by remember { mutableStateOf(false) }
+    // Only block polling during restore if we have a saved position to restore.
+    // On fresh launch (positionMs=0), no restore needed — start polling immediately.
+    var restored by remember { mutableStateOf(positionMs == 0L) }
     var connectedDevice by rememberSaveable { mutableStateOf<String?>(null) }
     val prefs = remember { context.getSharedPreferences("cast_ui", Context.MODE_PRIVATE) }
     var isFullscreen by rememberSaveable {
