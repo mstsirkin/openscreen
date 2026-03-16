@@ -394,7 +394,10 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var lastSeekMs by remember { mutableLongStateOf(0L) }
     var restored by remember { mutableStateOf(false) }
     var connectedDevice by rememberSaveable { mutableStateOf<String?>(null) }
-    var isFullscreen by rememberSaveable { mutableStateOf(false) }
+    val prefs = remember { context.getSharedPreferences("cast_ui", Context.MODE_PRIVATE) }
+    var isFullscreen by rememberSaveable {
+        mutableStateOf(prefs.getBoolean("fullscreen", false))
+    }
     var autoReconnectTargets by remember {
         mutableStateOf(getAutoReconnectTargets(context))
     }
@@ -548,7 +551,10 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             sliderEnabled = durationMs > 0L,
             positionMs = positionMs,
             durationMs = durationMs,
-            onExitFullscreen = { isFullscreen = false },
+            onExitFullscreen = {
+                isFullscreen = false
+                prefs.edit().putBoolean("fullscreen", false).apply()
+            },
         )
         return
     }
@@ -798,7 +804,10 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 )
                 // Fullscreen button overlay
                 Button(
-                    onClick = { isFullscreen = true },
+                    onClick = {
+                        isFullscreen = true
+                        prefs.edit().putBoolean("fullscreen", true).apply()
+                    },
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(8.dp)
