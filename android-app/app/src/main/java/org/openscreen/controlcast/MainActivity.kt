@@ -452,21 +452,6 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         }
     }
 
-    fun handlePlayPause() {
-        try {
-            if (isPlaying) {
-                exoPlayer.pause()
-                backend.pause()
-            } else {
-                exoPlayer.seekTo(positionMs)
-                backend.seekTo(positionMs)
-                backend.play()
-                exoPlayer.play()
-            }
-            isPlaying = !isPlaying
-        } catch (_: Exception) {}
-    }
-
     DisposableEffect(discovery) {
         discovery.startDiscovery()
         onDispose { discovery.stopDiscovery() }
@@ -584,7 +569,13 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             viewport = viewport,
             onViewportChange = { viewport = it; backend.updateViewport(it) },
             isPlaying = isPlaying,
-            onPlayPause = { handlePlayPause() },
+            onPlayPause = {
+                try {
+                    if (isPlaying) { exoPlayer.pause(); backend.pause() }
+                    else { exoPlayer.play(); backend.play() }
+                    isPlaying = !isPlaying
+                } catch (_: Exception) {}
+            },
             sliderValue = sliderValue,
             onSliderChange = {
                 sliderDragging = true; sliderValue = it; positionMs = (durationMs * it).toLong()
@@ -729,7 +720,16 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 Text("Open Video")
             }
             Button(
-                onClick = { handlePlayPause() },
+                onClick = {
+                    if (isPlaying) {
+                        exoPlayer.pause()
+                        backend.pause()
+                    } else {
+                        exoPlayer.play()
+                        backend.play()
+                    }
+                    isPlaying = !isPlaying
+                },
                 enabled = selectedUri != null,
             ) {
                 Text(if (isPlaying) "Pause" else "Play")
