@@ -256,9 +256,12 @@ void ControllableFileSender::OnAudioData(const float* interleaved_samples,
                                          Clock::time_point capture_begin_time,
                                          Clock::time_point capture_end_time,
                                          Clock::time_point reference_time) {
-  last_known_position_ = ClampPosition(
+  const auto computed_position = ClampPosition(
       start_position_ +
       std::max(reference_time - playback_start_time_, Clock::duration::zero()));
+  if (is_playing_) {
+    last_known_position_ = computed_position;
+  }
   // Apply A/V sync correction. Sender-side pipelines are well-synchronized
   // (< 1ms wall delay for both), but receivers have different audio vs video
   // decode/render latencies. This offset shifts audio earlier to compensate.
@@ -273,9 +276,12 @@ void ControllableFileSender::OnVideoFrame(const AVFrame& av_frame,
                                           Clock::time_point capture_begin_time,
                                           Clock::time_point capture_end_time,
                                           Clock::time_point reference_time) {
-  last_known_position_ = ClampPosition(
+  const auto computed_position = ClampPosition(
       start_position_ +
       std::max(reference_time - playback_start_time_, Clock::duration::zero()));
+  if (is_playing_) {
+    last_known_position_ = computed_position;
+  }
 
 #if defined(__ANDROID__) && !defined(CAST_STANDALONE_SENDER_HAVE_MEDIACODEC)
   // Drop frames on Android with software encoding to reduce CPU load.
