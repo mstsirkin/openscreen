@@ -158,10 +158,18 @@ void SimulatedCapturer::SeekAndDeliverOneFrame(
                 AVSEEK_FLAG_BACKWARD);
   avcodec_flush_buffers(decoder_context_.get());
 
-  // Decode frames until we get one at or past the seek target.
+  // Decode forward from the keyframe seek point and pick the decoded frame
+  // closest to the requested media timestamp. In monotonic streams, once we
+  // cross the target, the closest frame must be either the latest frame before
+  // it or the first frame at/after it.
   AVPacketUniquePtr packet = MakeUniqueAVPacket();
   AVFrameUniquePtr frame = MakeUniqueAVFrame();
-  for (int attempts = 0; attempts < 100; ++attempts) {
+  AVFrameUniquePtr best_frame = MakeUniqueAVFrame();
+  bool have_best = false;
+  auto best_distance = Clock::duration::max();
+  constexpr int kMaxSeekPreviewAttempts = 400;
+  bool crossed_target = false;
+  for (int attempts = 0; attempts < kMaxSeekPreviewAttempts; ++attempts) {
     int ret = av_read_frame(format_context_.get(), packet.get());
     if (ret < 0) break;
     if (packet->stream_index != stream_index_) {
@@ -175,11 +183,31 @@ void SimulatedCapturer::SeekAndDeliverOneFrame(
     ret = avcodec_receive_frame(decoder_context_.get(), frame.get());
     if (ret < 0) continue;
 
-    // Got a decoded frame — deliver it immediately.
+    const Clock::duration frame_timestamp = ToApproximateClockDuration(
+        frame->best_effort_timestamp,
+        format_context_->streams[stream_index_]->time_base);
+    const Clock::duration distance =
+        frame_timestamp >= media_time ? frame_timestamp - media_time
+                                      : media_time - frame_timestamp;
+    if (!have_best || distance < best_distance) {
+      av_frame_unref(best_frame.get());
+      av_frame_move_ref(best_frame.get(), frame.get());
+      best_distance = distance;
+      have_best = true;
+    } else {
+      av_frame_unref(frame.get());
+    }
+
+    if (frame_timestamp >= media_time) {
+      crossed_target = true;
+      break;
+    }
+  }
+
+  if (have_best) {
     Clock::time_point now = Clock::now();
-    DeliverDataToClient(*frame, now, now, reference_time);
-    av_frame_unref(frame.get());
-    return;
+    DeliverDataToClient(*best_frame, now, now, reference_time);
+    av_frame_unref(best_frame.get());
   }
 }
 
