@@ -70,7 +70,13 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -266,6 +272,7 @@ class NativeBackedBackend : CastControlBackend {
     fun getCastPositionMs(): Long = nativeGetPositionMs()
     fun getCastDurationMs(): Long = nativeGetDurationMs()
     fun isCastPlaying(): Boolean = nativeIsPlaying()
+    fun isConnected(): Boolean = nativeIsConnected()
 
     fun setAvSyncOffset(offsetMs: Long) {
         nativeSetAvSyncOffset(offsetMs)
@@ -301,6 +308,7 @@ class NativeBackedBackend : CastControlBackend {
     private external fun nativeGetPositionMs(): Long
     private external fun nativeGetDurationMs(): Long
     private external fun nativeIsPlaying(): Boolean
+    private external fun nativeIsConnected(): Boolean
     private external fun nativeSetAvSyncOffset(offsetMs: Long)
     private external fun nativeSetHwEncode(enabled: Boolean)
     private external fun nativeTestCast(target: String, filePath: String)
@@ -333,6 +341,8 @@ class Connection(private val backend: NativeBackedBackend) {
         private set
 
     private var listener: Listener? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var monitorJob: Job? = null
 
     fun setListener(listener: Listener?) {
         this.listener = listener
@@ -340,6 +350,21 @@ class Connection(private val backend: NativeBackedBackend) {
 
     private fun dispatchStateChanged() {
         listener?.onStateChanged(state)
+    }
+
+    private fun startMonitoring() {
+        monitorJob?.cancel()
+        monitorJob = scope.launch {
+            while (isActive && state == State.CONNECTED) {
+                delay(500)
+                if (!backend.isConnected()) {
+                    state = State.DISCONNECTED
+                    lastError = OsConstants.EIO
+                    dispatchStateChanged()
+                    break
+                }
+            }
+        }
     }
 
     suspend fun connect(device: CastDevice): Result<Unit> {
@@ -350,6 +375,7 @@ class Connection(private val backend: NativeBackedBackend) {
         val result = backend.connect(device.target)
         if (result.isSuccess) {
             state = State.CONNECTED
+            startMonitoring()
         } else {
             state = State.DISCONNECTED
             lastError = OsConstants.EIO
@@ -359,11 +385,18 @@ class Connection(private val backend: NativeBackedBackend) {
     }
 
     fun disconnect() {
+        monitorJob?.cancel()
+        monitorJob = null
         backend.disconnect()
         state = State.DISCONNECTED
         target = null
         lastError = 0
         dispatchStateChanged()
+    }
+
+    fun dispose() {
+        monitorJob?.cancel()
+        scope.cancel()
     }
 }
 
@@ -520,7 +553,10 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         connection.setListener(listener)
         connectionState = connection.state
         connectedDevice = connection.target
-        onDispose { connection.setListener(null) }
+        onDispose {
+            connection.setListener(null)
+            connection.dispose()
+        }
     }
 
     // Auto-load video shared from Gallery or other apps

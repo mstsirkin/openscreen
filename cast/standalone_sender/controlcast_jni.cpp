@@ -787,6 +787,15 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeSetAvSyncOffset(
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
+Java_org_openscreen_controlcast_NativeBackedBackend_nativeIsConnected(
+    JNIEnv* env,
+    jobject thiz) {
+  auto& state = State();
+  std::lock_guard<std::mutex> lock(state.mutex);
+  return state.connection.connected ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
 Java_org_openscreen_controlcast_NativeBackedBackend_nativeIsPlaying(
     JNIEnv* env,
     jobject thiz) {
