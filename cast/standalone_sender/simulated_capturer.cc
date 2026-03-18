@@ -168,7 +168,6 @@ void SimulatedCapturer::SeekAndDeliverOneFrame(
   bool have_best = false;
   auto best_distance = Clock::duration::max();
   constexpr int kMaxSeekPreviewAttempts = 400;
-  bool crossed_target = false;
   for (int attempts = 0; attempts < kMaxSeekPreviewAttempts; ++attempts) {
     int ret = av_read_frame(format_context_.get(), packet.get());
     if (ret < 0) break;
@@ -198,10 +197,7 @@ void SimulatedCapturer::SeekAndDeliverOneFrame(
       av_frame_unref(frame.get());
     }
 
-    if (frame_timestamp >= media_time) {
-      crossed_target = true;
-      break;
-    }
+    if (frame_timestamp >= media_time) break;
   }
 
   if (have_best) {
