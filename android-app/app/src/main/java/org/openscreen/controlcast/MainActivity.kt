@@ -454,12 +454,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     // Connect to a device and optionally send the current video.
     fun connectToDevice(device: CastDevice) {
         coroutineScope.launch {
-            val result = connection.connect(device)
-            if (result.isSuccess) {
-                selectedUri?.let { uri ->
-                    backend.openVideo(context, uri, localMirrorEnabled)
-                }
-            }
+            connection.connect(device)
         }
     }
 
@@ -508,22 +503,24 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             exoPlayer.setMediaItem(mediaItem)
             exoPlayer.prepare()
             if (localMirrorEnabled) exoPlayer.play()
-            backend.openVideo(context, sharedUri, localMirrorEnabled)
         }
     }
 
     // Auto-reconnect: when a device marked for auto-reconnect appears
     // and nothing is connected yet, connect automatically.
-    LaunchedEffect(discoveredDevices, connectedDevice) {
-        if (connectedDevice != null) return@LaunchedEffect
+    LaunchedEffect(discoveredDevices, connectionState) {
+        if (connectionState != Connection.State.DISCONNECTED) return@LaunchedEffect
         val targets = getAutoReconnectTargets(context)
         val match = discoveredDevices.firstOrNull { it.target in targets }
         if (match != null) {
-            val result = connection.connect(match)
-            if (result.isSuccess) {
-                selectedUri?.let { uri ->
-                    backend.openVideo(context, uri, localMirrorEnabled)
-                }
+            connection.connect(match)
+        }
+    }
+
+    LaunchedEffect(connectionState, selectedUri) {
+        if (connectionState == Connection.State.CONNECTED) {
+            selectedUri?.let { uri ->
+                backend.openVideo(context, uri, localMirrorEnabled)
             }
         }
     }
@@ -601,7 +598,6 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             if (localMirrorEnabled) {
                 exoPlayer.play()
             }
-            backend.openVideo(context, uri, localMirrorEnabled)
         }
     }
 
