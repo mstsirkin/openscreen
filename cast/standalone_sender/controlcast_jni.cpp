@@ -9,6 +9,7 @@
 
 #include <android/log.h>
 #include <algorithm>
+#include <deque>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -26,16 +27,35 @@
 #include "platform/base/ip_address.h"
 #include "platform/impl/platform_client_posix.h"
 #include "platform/impl/task_runner.h"
+#include "util/alarm.h"
 #include "util/chrono_helpers.h"
 #endif  // HAVE_OPENSCREEN
 
 namespace {
+constexpr auto kInitialReconnectDelay = std::chrono::milliseconds(200);
+constexpr auto kMaxReconnectDelay = std::chrono::seconds(5);
+constexpr size_t kPausedSeekQueueCapacity = 1;
+
+struct ConnectionState {
+  std::string target;
+  bool connected = false;
+
+#ifdef HAVE_OPENSCREEN
+  std::unique_ptr<openscreen::cast::ControllableFileCastAgent> cast;
+  std::unique_ptr<openscreen::Alarm> reconnect_alarm;
+  bool session_restart_posted = false;
+  uint64_t desired_session_generation = 0;
+  bool reconnect_enabled = false;
+  std::chrono::milliseconds reconnect_delay = kInitialReconnectDelay;
+  std::deque<long long> paused_seek_queue;
+  bool paused_seek_drain_posted = false;
+#endif
+};
 
 struct ControllerState {
   std::mutex mutex;
-  std::string target;
+  ConnectionState connection;
   std::string video_uri;
-  bool connected = false;
   bool mirror_locally = true;
   bool playing = false;
   long long position_ms = 0;
@@ -52,7 +72,6 @@ struct ControllerState {
 
 #ifdef HAVE_OPENSCREEN
   openscreen::TaskRunnerImpl* task_runner = nullptr;
-  std::unique_ptr<openscreen::cast::ControllableFileCastAgent> agent;
   std::thread runner_thread;
 #endif
 };
@@ -81,16 +100,16 @@ jstring StdStringToJString(JNIEnv* env, const std::string& value) {
 // Caller must hold state.mutex.
 void UpdateStatusLocked(ControllerState& state) {
   std::ostringstream stream;
-  if (!state.connected) {
+  if (!state.connection.connected) {
     stream << "Not connected.";
-    if (!state.target.empty()) {
-      stream << " Target: " << state.target;
+    if (!state.connection.target.empty()) {
+      stream << " Target: " << state.connection.target;
     }
     state.status = stream.str();
     return;
   }
 
-  stream << "Connected to " << state.target;
+  stream << "Connected to " << state.connection.target;
   if (!state.video_uri.empty()) {
     stream << " | " << (state.playing ? "Playing" : "Paused");
     stream << " @ " << state.position_ms / 1000.0 << "s";
@@ -118,6 +137,9 @@ openscreen::IPEndpoint ParseTarget(const std::string& target) {
   return {};
 }
 
+void RequestCastSessionRestart(ControllerState& state);
+void DrainPausedSeekQueue(ControllerState& state);
+
 void EnsureTaskRunner(ControllerState& state) {
   if (!state.task_runner) {
     state.task_runner = new openscreen::TaskRunnerImpl(&openscreen::Clock::now);
@@ -128,82 +150,221 @@ void EnsureTaskRunner(ControllerState& state) {
       state.task_runner->RunUntilStopped();
     });
     state.runner_thread.detach();
+    state.connection.reconnect_alarm =
+        std::make_unique<openscreen::Alarm>(&openscreen::Clock::now,
+                                            *state.task_runner);
   }
 }
 
-// (Re)create the agent and connect to the Cast receiver.
-// Posts the work to the task runner thread because the agent and its
-// TLS factory must be created and destroyed on that thread.
-void StartCastSession(ControllerState& state,
-                      const std::string& target,
-                      const std::string& video_path) {
-  auto endpoint = ParseTarget(target);
-  if (!endpoint.port) {
+void StartCastSessionOnTaskRunner(ControllerState& state,
+                                  openscreen::IPEndpoint endpoint,
+                                  const std::string& video_path) {
+  long long position_ms = 0;
+  bool playing = false;
+  float zoom = 1.0f;
+  float offset_x = 0.0f;
+  float offset_y = 0.0f;
+  {
     std::lock_guard<std::mutex> lock(state.mutex);
-    state.status = "Invalid target: " + target;
-    return;
+    position_ms = state.position_ms;
+    playing = state.playing;
+    zoom = state.zoom;
+    offset_x = state.offset_x;
+    offset_y = state.offset_y;
   }
 
-  LOGI("StartCastSession: target=%s file=%s", target.c_str(), video_path.c_str());
+  if (state.connection.reconnect_alarm) {
+    state.connection.reconnect_alarm->Cancel();
+  }
+  state.connection.reconnect_delay = kInitialReconnectDelay;
+  LOGI("TaskRunner: stopping old agent");
+  // Properly destroy the old agent. Its encoder destructor joins
+  // the encode thread, so no more tasks will be posted after this.
+  state.connection.cast.reset();
 
-  state.task_runner->PostTask(
-      [&state, endpoint, video_path]() {
-        LOGI("TaskRunner: stopping old agent");
-        // Properly destroy the old agent. Its encoder destructor joins
-        // the encode thread, so no more tasks will be posted after this.
-        state.agent.reset();
+  LOGI("TaskRunner: creating new agent");
+  auto trust_store = openscreen::cast::CastTrustStore::Create();
+  state.connection.cast =
+      std::make_unique<openscreen::cast::ControllableFileCastAgent>(
+          *state.task_runner, std::move(trust_store),
+          [&state]() {
+            LOGI("Agent session ended");
+            bool should_retry = false;
+            std::string target;
+            std::string video_path;
+            std::chrono::milliseconds retry_delay = kInitialReconnectDelay;
+            {
+              std::lock_guard<std::mutex> lock(state.mutex);
+              state.connection.connected = false;
+              UpdateStatusLocked(state);
+              should_retry = state.connection.reconnect_enabled &&
+                             !state.connection.target.empty() &&
+                             !state.video_path.empty();
+              target = state.connection.target;
+              video_path = state.video_path;
+              retry_delay = state.connection.reconnect_delay;
+              state.connection.reconnect_delay =
+                  std::min(state.connection.reconnect_delay * 2,
+                           std::chrono::duration_cast<std::chrono::milliseconds>(
+                               kMaxReconnectDelay));
+            }
+            if (should_retry && state.connection.reconnect_alarm) {
+              LOGI("Scheduling reconnect retry in %lld ms for target=%s file=%s",
+                   static_cast<long long>(retry_delay.count()), target.c_str(),
+                   video_path.c_str());
+              state.connection.reconnect_alarm->ScheduleFromNow(
+                  [&state]() { RequestCastSessionRestart(state); }, retry_delay);
+            }
+          });
 
-        LOGI("TaskRunner: creating new agent");
-        auto trust_store = openscreen::cast::CastTrustStore::Create();
-        state.agent =
-            std::make_unique<openscreen::cast::ControllableFileCastAgent>(
-                *state.task_runner, std::move(trust_store),
-                [&state]() {
-                  LOGI("Agent session ended");
-                  std::lock_guard<std::mutex> lock(state.mutex);
-                  state.connected = false;
-                  UpdateStatusLocked(state);
-                });
+  openscreen::cast::VideoViewport vp;
+  vp.zoom = std::clamp<float>(zoom, 1.0f, 8.0f);
+  vp.center_x = 0.5 - offset_x / 1920.0;
+  vp.center_y = 0.5 - offset_y / 1080.0;
+  state.connection.cast->SetViewport(vp);
+  state.connection.cast->SeekTo(std::chrono::milliseconds(position_ms));
+  if (playing) {
+    state.connection.cast->Play();
+  } else {
+    state.connection.cast->Pause();
+  }
+  LOGI("TaskRunner: seeded agent state pos=%lld playing=%d zoom=%.3f offset=(%.1f,%.1f)",
+       position_ms, playing ? 1 : 0, zoom, offset_x, offset_y);
 
-        openscreen::cast::ConnectionSettings settings;
-        settings.receiver_endpoint = endpoint;
-        settings.path_to_file = video_path;
-        settings.should_include_video = true;
-        settings.use_android_rtp_hack = true;
-        settings.use_remoting = false;
-        settings.should_loop_video = false;
-        settings.enable_dscp = true;
+  openscreen::cast::ConnectionSettings settings;
+  settings.receiver_endpoint = endpoint;
+  settings.path_to_file = video_path;
+  settings.should_include_video = true;
+  settings.use_android_rtp_hack = true;
+  settings.use_remoting = false;
+  settings.should_loop_video = false;
+  settings.enable_dscp = true;
 #if defined(CAST_STANDALONE_SENDER_HAVE_MEDIACODEC)
-        if (state.use_hw_encode) {
-          settings.codec = openscreen::cast::VideoCodec::kH264;
-          settings.max_bitrate = 5000000;
-          LOGI("Using hardware H.264 encoding");
-        } else
+  if (state.use_hw_encode) {
+    settings.codec = openscreen::cast::VideoCodec::kH264;
+    settings.max_bitrate = 5000000;
+    LOGI("Using hardware H.264 encoding");
+  } else
 #endif
-        {
-          settings.codec = openscreen::cast::VideoCodec::kVp8;
-          settings.max_bitrate = 1500000;
-          LOGI("Using software VP8 encoding");
+  {
+    settings.codec = openscreen::cast::VideoCodec::kVp8;
+    settings.max_bitrate = 1500000;
+    LOGI("Using software VP8 encoding");
+  }
+
+  settings.av_sync_offset =
+      std::chrono::milliseconds(state.av_sync_offset_ms);
+  settings.playout_delay =
+      std::chrono::milliseconds(state.playout_delay_ms);
+
+  LOGI("TaskRunner: connecting buf=%dms avsync=%lldms file=%s",
+       state.playout_delay_ms,
+       (long long)state.av_sync_offset_ms,
+       video_path.c_str());
+  state.connection.cast->Connect(std::move(settings));
+
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.connection.connected = true;
+    UpdateStatusLocked(state);
+  }
+  LOGI("TaskRunner: connect initiated");
+}
+
+void RequestCastSessionRestart(ControllerState& state) {
+  std::string target;
+  std::string video_path;
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    target = state.connection.target;
+    video_path = state.video_path;
+    if (target.empty() || video_path.empty()) {
+      return;
+    }
+    ++state.connection.desired_session_generation;
+    if (state.connection.session_restart_posted) {
+      LOGI("RequestCastSessionRestart: coalesced target=%s file=%s gen=%llu",
+           target.c_str(), video_path.c_str(),
+           static_cast<unsigned long long>(
+               state.connection.desired_session_generation));
+      return;
+    }
+    state.connection.session_restart_posted = true;
+  }
+
+  state.task_runner->PostTask([&state]() {
+    while (true) {
+      std::string current_target;
+      std::string current_video_path;
+      uint64_t generation = 0;
+      {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        current_target = state.connection.target;
+        current_video_path = state.video_path;
+        generation = state.connection.desired_session_generation;
+      }
+
+      LOGI("RequestCastSessionRestart: applying target=%s file=%s gen=%llu",
+           current_target.c_str(), current_video_path.c_str(),
+           static_cast<unsigned long long>(generation));
+      auto endpoint = ParseTarget(current_target);
+      if (!endpoint.port) {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        state.status = "Invalid target: " + current_target;
+        state.connection.session_restart_posted = false;
+        return;
+      }
+      StartCastSessionOnTaskRunner(state, endpoint, current_video_path);
+
+      bool needs_another_pass = false;
+      {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        needs_another_pass =
+            generation != state.connection.desired_session_generation;
+        if (!needs_another_pass) {
+          state.connection.session_restart_posted = false;
         }
+      }
+      if (!needs_another_pass) {
+        return;
+      }
+      LOGI("RequestCastSessionRestart: detected newer desired session, retrying");
+    }
+  });
+}
 
-        settings.av_sync_offset =
-            std::chrono::milliseconds(state.av_sync_offset_ms);
-        settings.playout_delay =
-            std::chrono::milliseconds(state.playout_delay_ms);
+long long GetAgentPositionMsForLog(ControllerState& state) {
+  if (!state.connection.cast) {
+    return -1;
+  }
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             state.connection.cast->GetCurrentPosition())
+      .count();
+}
 
-        LOGI("TaskRunner: connecting buf=%dms avsync=%lldms file=%s",
-             state.playout_delay_ms,
-             (long long)state.av_sync_offset_ms,
-             video_path.c_str());
-        state.agent->Connect(std::move(settings));
+void DrainPausedSeekQueue(ControllerState& state) {
+  while (true) {
+    long long pos = -1;
+    {
+      std::lock_guard<std::mutex> lock(state.mutex);
+      if (state.connection.paused_seek_queue.empty()) {
+        state.connection.paused_seek_drain_posted = false;
+        return;
+      }
+      pos = state.connection.paused_seek_queue.front();
+      state.connection.paused_seek_queue.pop_front();
+    }
 
-        {
-          std::lock_guard<std::mutex> lock(state.mutex);
-          state.connected = true;
-          UpdateStatusLocked(state);
-        }
-        LOGI("TaskRunner: connect initiated");
-      });
+    if (!state.connection.cast) {
+      continue;
+    }
+
+    LOGI("nativeSeekTo exec(paused-queue): target=%lld agent_pos_before=%lld",
+         pos, GetAgentPositionMsForLog(state));
+    state.connection.cast->SeekTo(std::chrono::milliseconds(pos));
+    LOGI("nativeSeekTo exec(paused-queue): target=%lld agent_pos_after=%lld",
+         pos, GetAgentPositionMsForLog(state));
+  }
 }
 #endif  // HAVE_OPENSCREEN
 
@@ -264,14 +425,15 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeTestCast(
 
   {
     std::lock_guard<std::mutex> lock(state.mutex);
-    state.target = target_str;
+    state.connection.target = target_str;
     state.video_path = path;
     state.video_uri = path;
+    state.connection.reconnect_enabled = true;
   }
 
 #ifdef HAVE_OPENSCREEN
   EnsureTaskRunner(state);
-  StartCastSession(state, target_str, path);
+  RequestCastSessionRestart(state);
 #endif
 }
 
@@ -286,29 +448,31 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeConnect(
 
   {
     std::lock_guard<std::mutex> lock(state.mutex);
-    state.target = JStringToStdString(env, target);
-    target_str = state.target;
+    state.connection.target = JStringToStdString(env, target);
+    target_str = state.connection.target;
     video_path = state.video_path;
+    state.connection.reconnect_enabled = true;
   }
 
 #ifdef HAVE_OPENSCREEN
   if (!target_str.empty() && !video_path.empty()) {
-    StartCastSession(state, target_str, video_path);
+    EnsureTaskRunner(state);
+    RequestCastSessionRestart(state);
   } else {
     std::lock_guard<std::mutex> lock(state.mutex);
-    state.connected = !target_str.empty();
+    state.connection.connected = !target_str.empty();
     UpdateStatusLocked(state);
   }
 #else
   {
     std::lock_guard<std::mutex> lock(state.mutex);
-    state.connected = !target_str.empty();
+    state.connection.connected = !target_str.empty();
     UpdateStatusLocked(state);
   }
 #endif
 
   std::lock_guard<std::mutex> lock(state.mutex);
-  return state.connected ? JNI_TRUE : JNI_FALSE;
+  return state.connection.connected ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -320,13 +484,23 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeDisconnect(
   // Destroy agent on the task runner thread.
   if (state.task_runner) {
     state.task_runner->PostTask([&state]() {
-      state.agent.reset();
+      if (state.connection.reconnect_alarm) {
+        state.connection.reconnect_alarm->Cancel();
+      }
+      {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        state.connection.paused_seek_queue.clear();
+        state.connection.paused_seek_drain_posted = false;
+      }
+      state.connection.cast.reset();
     });
   }
 #endif
   std::lock_guard<std::mutex> lock(state.mutex);
-  state.connected = false;
+  state.connection.connected = false;
   state.playing = false;
+  state.connection.reconnect_enabled = false;
+  state.connection.reconnect_delay = kInitialReconnectDelay;
   UpdateStatusLocked(state);
 }
 
@@ -337,7 +511,9 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeOpenVideo(
     jstring uri,
     jint fd1,
     jint fd2,
-    jboolean mirror_locally) {
+    jboolean mirror_locally,
+    jlong start_position_ms,
+    jboolean start_playing) {
   auto& state = State();
   std::string target_str;
   std::string video_path;
@@ -346,7 +522,8 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeOpenVideo(
     std::lock_guard<std::mutex> lock(state.mutex);
     state.video_uri = JStringToStdString(env, uri);
     state.mirror_locally = mirror_locally == JNI_TRUE;
-    state.position_ms = 0;
+    state.position_ms = std::max<long long>(0, start_position_ms);
+    state.connection.reconnect_enabled = true;
 
     if (fd1 >= 0 && fd2 >= 0) {
       // Dup both fds (Java's PFDs own the originals).
@@ -362,14 +539,17 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeOpenVideo(
            state.video_fd2, state.video_path.c_str());
     }
 
-    target_str = state.target;
+    target_str = state.connection.target;
     video_path = state.video_path;
-    state.playing = state.connected;
+    state.playing = start_playing == JNI_TRUE;
+    LOGI("nativeOpenVideo: start_pos=%lld start_playing=%d",
+         state.position_ms, state.playing ? 1 : 0);
   }
 
 #ifdef HAVE_OPENSCREEN
   if (!target_str.empty() && !video_path.empty()) {
-    StartCastSession(state, target_str, video_path);
+    EnsureTaskRunner(state);
+    RequestCastSessionRestart(state);
   }
 #endif
 
@@ -383,7 +563,9 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeOpenVideoPath(
     jobject thiz,
     jstring uri,
     jstring file_path,
-    jboolean mirror_locally) {
+    jboolean mirror_locally,
+    jlong start_position_ms,
+    jboolean start_playing) {
   auto& state = State();
   std::string target_str;
   std::string video_path;
@@ -392,18 +574,21 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeOpenVideoPath(
     std::lock_guard<std::mutex> lock(state.mutex);
     state.video_uri = JStringToStdString(env, uri);
     state.mirror_locally = mirror_locally == JNI_TRUE;
-    state.position_ms = 0;
+    state.position_ms = std::max<long long>(0, start_position_ms);
     state.video_path = JStringToStdString(env, file_path);
-    target_str = state.target;
+    state.connection.reconnect_enabled = true;
+    target_str = state.connection.target;
     video_path = state.video_path;
-    state.playing = state.connected;
-    LOGI("nativeOpenVideoPath: path=%s target=%s", video_path.c_str(),
-         target_str.c_str());
+    state.playing = start_playing == JNI_TRUE;
+    LOGI("nativeOpenVideoPath: path=%s target=%s start_pos=%lld start_playing=%d",
+         video_path.c_str(), target_str.c_str(), state.position_ms,
+         state.playing ? 1 : 0);
   }
 
 #ifdef HAVE_OPENSCREEN
   if (!target_str.empty() && !video_path.empty()) {
-    StartCastSession(state, target_str, video_path);
+    EnsureTaskRunner(state);
+    RequestCastSessionRestart(state);
   }
 #endif
 
@@ -416,15 +601,29 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativePlay(
     JNIEnv* env,
     jobject thiz) {
   auto& state = State();
+  LOGI("nativePlay request: connected=%d playing=%d state_pos=%lld uri=%s",
+       state.connection.connected, state.playing, state.position_ms,
+       state.video_uri.c_str());
 #ifdef HAVE_OPENSCREEN
-  if (state.agent && state.task_runner) {
+  if (state.connection.cast && state.task_runner) {
     state.task_runner->PostTask([&state]() {
-      if (state.agent) state.agent->Play();
+      if (state.connection.cast) {
+        {
+          std::lock_guard<std::mutex> lock(state.mutex);
+          state.connection.paused_seek_queue.clear();
+          state.connection.paused_seek_drain_posted = false;
+        }
+        LOGI("nativePlay exec: agent_pos_before=%lld",
+             GetAgentPositionMsForLog(state));
+        state.connection.cast->Play();
+        LOGI("nativePlay exec: agent_pos_after=%lld",
+             GetAgentPositionMsForLog(state));
+      }
     });
   }
 #endif
   std::lock_guard<std::mutex> lock(state.mutex);
-  state.playing = state.connected && !state.video_uri.empty();
+  state.playing = state.connection.connected && !state.video_uri.empty();
   UpdateStatusLocked(state);
 }
 
@@ -433,10 +632,19 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativePause(
     JNIEnv* env,
     jobject thiz) {
   auto& state = State();
+  LOGI("nativePause request: connected=%d playing=%d state_pos=%lld uri=%s",
+       state.connection.connected, state.playing, state.position_ms,
+       state.video_uri.c_str());
 #ifdef HAVE_OPENSCREEN
-  if (state.agent && state.task_runner) {
+  if (state.connection.cast && state.task_runner) {
     state.task_runner->PostTask([&state]() {
-      if (state.agent) state.agent->Pause();
+      if (state.connection.cast) {
+        LOGI("nativePause exec: agent_pos_before=%lld",
+             GetAgentPositionMsForLog(state));
+        state.connection.cast->Pause();
+        LOGI("nativePause exec: agent_pos_after=%lld",
+             GetAgentPositionMsForLog(state));
+      }
     });
   }
 #endif
@@ -452,13 +660,43 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeSeekTo(
     jlong position_ms) {
   auto& state = State();
   long long pos = std::max<long long>(0, position_ms);
+  LOGI("nativeSeekTo request: pos=%lld connected=%d playing=%d state_pos=%lld",
+       pos, state.connection.connected, state.playing, state.position_ms);
 #ifdef HAVE_OPENSCREEN
-  if (state.agent && state.task_runner) {
-    state.task_runner->PostTask([&state, pos]() {
-      if (state.agent) {
-        state.agent->SeekTo(std::chrono::milliseconds(pos));
+  if (state.connection.cast && state.task_runner) {
+    bool queue_paused_seek = false;
+    {
+      std::lock_guard<std::mutex> lock(state.mutex);
+      queue_paused_seek = !state.playing;
+      if (queue_paused_seek) {
+        if (state.connection.paused_seek_queue.size() >=
+            kPausedSeekQueueCapacity) {
+          const auto dropped = state.connection.paused_seek_queue.front();
+          state.connection.paused_seek_queue.pop_front();
+          LOGI("nativeSeekTo queue drop_oldest: dropped=%lld capacity=%zu",
+               dropped, kPausedSeekQueueCapacity);
+        }
+        state.connection.paused_seek_queue.push_back(pos);
+        LOGI("nativeSeekTo queue push: target=%lld size=%zu/%zu",
+             pos, state.connection.paused_seek_queue.size(),
+             kPausedSeekQueueCapacity);
+        if (!state.connection.paused_seek_drain_posted) {
+          state.connection.paused_seek_drain_posted = true;
+          state.task_runner->PostTask([&state]() { DrainPausedSeekQueue(state); });
+        }
       }
-    });
+    }
+    if (!queue_paused_seek) {
+      state.task_runner->PostTask([&state, pos]() {
+        if (state.connection.cast) {
+          LOGI("nativeSeekTo exec: target=%lld agent_pos_before=%lld",
+               pos, GetAgentPositionMsForLog(state));
+          state.connection.cast->SeekTo(std::chrono::milliseconds(pos));
+          LOGI("nativeSeekTo exec: target=%lld agent_pos_after=%lld",
+               pos, GetAgentPositionMsForLog(state));
+        }
+      });
+    }
   }
 #endif
   std::lock_guard<std::mutex> lock(state.mutex);
@@ -476,13 +714,13 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeUpdateViewport(
   auto& state = State();
   float z = std::clamp<float>(zoom, 1.0f, 8.0f);
 #ifdef HAVE_OPENSCREEN
-  if (state.agent && state.task_runner) {
+  if (state.connection.cast && state.task_runner) {
     openscreen::cast::VideoViewport vp;
     vp.zoom = z;
     vp.center_x = 0.5 - offset_x / 1920.0;
     vp.center_y = 0.5 - offset_y / 1080.0;
     state.task_runner->PostTask([&state, vp]() {
-      if (state.agent) state.agent->SetViewport(vp);
+      if (state.connection.cast) state.connection.cast->SetViewport(vp);
     });
   }
 #endif
@@ -539,10 +777,10 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeSetAvSyncOffset(
   }
   LOGI("A/V sync offset set to %lld ms", (long long)offset_ms);
 #ifdef HAVE_OPENSCREEN
-  if (state.agent && state.task_runner) {
+  if (state.connection.cast && state.task_runner) {
     auto dur = std::chrono::milliseconds(offset_ms);
     state.task_runner->PostTask([&state, dur]() {
-      if (state.agent) state.agent->SetAvSyncOffset(dur);
+      if (state.connection.cast) state.connection.cast->SetAvSyncOffset(dur);
     });
   }
 #endif
@@ -554,8 +792,8 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeIsPlaying(
     jobject thiz) {
   auto& state = State();
 #ifdef HAVE_OPENSCREEN
-  if (state.agent) {
-    return state.agent->IsPlaying() ? JNI_TRUE : JNI_FALSE;
+  if (state.connection.cast) {
+    return state.connection.cast->IsPlaying() ? JNI_TRUE : JNI_FALSE;
   }
 #endif
   std::lock_guard<std::mutex> lock(state.mutex);
@@ -568,8 +806,8 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeGetDurationMs(
     jobject thiz) {
   auto& state = State();
 #ifdef HAVE_OPENSCREEN
-  if (state.agent) {
-    auto dur = state.agent->GetDuration();
+  if (state.connection.cast) {
+    auto dur = state.connection.cast->GetDuration();
     return std::chrono::duration_cast<std::chrono::milliseconds>(dur).count();
   }
 #endif
@@ -582,10 +820,8 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeGetPositionMs(
     jobject thiz) {
   auto& state = State();
 #ifdef HAVE_OPENSCREEN
-  if (state.agent) {
-    // TODO: this reads from the sender on the JNI thread; safe because
-    // GetCurrentPosition only reads atomic/const fields.
-    auto pos = state.agent->GetCurrentPosition();
+  if (state.connection.cast) {
+    auto pos = state.connection.cast->GetCurrentPosition();
     return std::chrono::duration_cast<std::chrono::milliseconds>(pos).count();
   }
 #endif
