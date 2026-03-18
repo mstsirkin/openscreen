@@ -165,7 +165,13 @@ interface CastControlBackend {
     val status: kotlinx.coroutines.flow.StateFlow<String>
     suspend fun connect(target: String): Result<Unit>
     fun disconnect()
-    fun openVideo(context: Context, uri: Uri, mirrorLocally: Boolean)
+    fun openVideo(
+        context: Context,
+        uri: Uri,
+        mirrorLocally: Boolean,
+        startPositionMs: Long = 0L,
+        startPlaying: Boolean = false,
+    )
     fun play()
     fun pause()
     fun seekTo(positionMs: Long)
@@ -206,7 +212,13 @@ class NativeBackedBackend : CastControlBackend {
     private var openPfd1: ParcelFileDescriptor? = null
     private var openPfd2: ParcelFileDescriptor? = null
 
-    override fun openVideo(context: Context, uri: Uri, mirrorLocally: Boolean) {
+    override fun openVideo(
+        context: Context,
+        uri: Uri,
+        mirrorLocally: Boolean,
+        startPositionMs: Long,
+        startPlaying: Boolean,
+    ) {
         openPfd1?.close()
         openPfd2?.close()
         openPfd1 = null
@@ -216,14 +228,27 @@ class NativeBackedBackend : CastControlBackend {
         // ffmpeg can open directly.  This works for /sdcard files.
         val filePath = resolveFilePath(context, uri)
         if (filePath != null) {
-            nativeOpenVideoPath(uri.toString(), filePath, mirrorLocally)
+            nativeOpenVideoPath(
+                uri.toString(),
+                filePath,
+                mirrorLocally,
+                startPositionMs,
+                startPlaying,
+            )
         } else {
             // Fallback: open two independent fds for audio/video capturers.
             openPfd1 = context.contentResolver.openFileDescriptor(uri, "r")
             openPfd2 = context.contentResolver.openFileDescriptor(uri, "r")
             val fd1 = openPfd1?.fd ?: -1
             val fd2 = openPfd2?.fd ?: -1
-            nativeOpenVideo(uri.toString(), fd1, fd2, mirrorLocally)
+            nativeOpenVideo(
+                uri.toString(),
+                fd1,
+                fd2,
+                mirrorLocally,
+                startPositionMs,
+                startPlaying,
+            )
         }
         refreshStatus()
     }
@@ -296,8 +321,21 @@ class NativeBackedBackend : CastControlBackend {
     private external fun nativeInit()
     private external fun nativeConnect(target: String): Boolean
     private external fun nativeDisconnect()
-    private external fun nativeOpenVideo(uri: String, fd1: Int, fd2: Int, mirrorLocally: Boolean)
-    private external fun nativeOpenVideoPath(uri: String, filePath: String, mirrorLocally: Boolean)
+    private external fun nativeOpenVideo(
+        uri: String,
+        fd1: Int,
+        fd2: Int,
+        mirrorLocally: Boolean,
+        startPositionMs: Long,
+        startPlaying: Boolean,
+    )
+    private external fun nativeOpenVideoPath(
+        uri: String,
+        filePath: String,
+        mirrorLocally: Boolean,
+        startPositionMs: Long,
+        startPlaying: Boolean,
+    )
     private external fun nativePlay()
     private external fun nativePause()
     private external fun nativeSeekTo(positionMs: Long)
@@ -355,9 +393,16 @@ class Connection(private val backend: NativeBackedBackend) {
     private fun startMonitoring() {
         monitorJob?.cancel()
         monitorJob = scope.launch {
-            while (isActive && state == State.CONNECTED) {
+            while (isActive && state != State.DISCONNECTED) {
                 delay(500)
-                if (!backend.isConnected()) {
+                val connected = backend.isConnected()
+                if (state == State.CONNECTING && connected) {
+                    state = State.CONNECTED
+                    lastError = 0
+                    dispatchStateChanged()
+                    continue
+                }
+                if (state == State.CONNECTED && !connected) {
                     state = State.DISCONNECTED
                     lastError = OsConstants.EIO
                     dispatchStateChanged()
@@ -374,7 +419,6 @@ class Connection(private val backend: NativeBackedBackend) {
         dispatchStateChanged()
         val result = backend.connect(device.target)
         if (result.isSuccess) {
-            state = State.CONNECTED
             startMonitoring()
         } else {
             state = State.DISCONNECTED
@@ -586,7 +630,15 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     LaunchedEffect(connectionState, selectedUri) {
         if (connectionState == Connection.State.CONNECTED) {
             selectedUri?.let { uri ->
-                backend.openVideo(context, uri, localMirrorEnabled)
+                val startPositionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+                val startPlaying = exoPlayer.isPlaying
+                backend.openVideo(
+                    context,
+                    uri,
+                    localMirrorEnabled,
+                    startPositionMs,
+                    startPlaying,
+                )
             }
         }
     }

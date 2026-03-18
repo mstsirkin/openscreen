@@ -471,8 +471,7 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeConnect(
   }
 #endif
 
-  std::lock_guard<std::mutex> lock(state.mutex);
-  return state.connection.connected ? JNI_TRUE : JNI_FALSE;
+  return !target_str.empty() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL

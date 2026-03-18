@@ -3,6 +3,22 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+import org.gradle.api.tasks.Copy
+import java.security.MessageDigest
+
+fun sha256(file: File): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    file.inputStream().use { input ->
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) break
+            digest.update(buffer, 0, read)
+        }
+    }
+    return digest.digest().joinToString("") { "%02x".format(it) }
+}
+
 android {
     namespace = "org.openscreen.controlcast"
     compileSdk = 35
@@ -47,16 +63,56 @@ android {
         kotlinCompilerExtensionVersion = "1.5.14"
     }
 
-    // Native library is prebuilt via GN (see openscreen/cast/standalone_sender/BUILD.gn
-    // "controlcast" target) and placed in src/main/jniLibs/<abi>/libcontrolcast.so.
-    // To rebuild: ninja -C out/android cast/standalone_sender:controlcast
-    // Then copy: cp out/android/libcontrolcast.so app/src/main/jniLibs/arm64-v8a/
-
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+}
+
+val controlcastSo = rootProject.file("../out/android/libcontrolcast.so")
+val packagedControlcastSo = project.file("src/main/jniLibs/arm64-v8a/libcontrolcast.so")
+
+val syncControlcastJniLib by tasks.registering(Copy::class) {
+    group = "build"
+    description = "Copy the freshly built GN controlcast native library into app jniLibs."
+    from(controlcastSo)
+    into(packagedControlcastSo.parentFile)
+    rename { "libcontrolcast.so" }
+    doFirst {
+        require(controlcastSo.exists()) {
+            "Missing native library at ${controlcastSo.path}. Build it first with: ninja -C out/android controlcast"
+        }
+        packagedControlcastSo.parentFile.mkdirs()
+    }
+}
+
+val verifyControlcastJniLib by tasks.registering {
+    group = "verification"
+    description = "Fail if the packaged controlcast JNI library does not match the GN build output."
+    dependsOn(syncControlcastJniLib)
+    doLast {
+        require(packagedControlcastSo.exists()) {
+            "Packaged JNI library missing at ${packagedControlcastSo.path}"
+        }
+        val sourceHash = sha256(controlcastSo)
+        val packagedHash = sha256(packagedControlcastSo)
+        check(sourceHash == packagedHash) {
+            "Packaged JNI library is stale: ${packagedControlcastSo.path} does not match ${controlcastSo.path}"
+        }
+    }
+}
+
+tasks.matching {
+    it.name in setOf(
+        "mergeDebugJniLibFolders",
+        "mergeDebugNativeLibs",
+        "assembleDebug",
+        "packageDebug",
+        "installDebug",
+    )
+}.configureEach {
+    dependsOn(syncControlcastJniLib, verifyControlcastJniLib)
 }
 
 dependencies {
