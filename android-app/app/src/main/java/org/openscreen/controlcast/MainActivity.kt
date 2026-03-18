@@ -71,8 +71,6 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -321,34 +319,51 @@ class Connection(private val backend: NativeBackedBackend) {
         CONNECTED,
     }
 
-    private val mutableState = MutableStateFlow(State.DISCONNECTED)
-    val state: StateFlow<State> = mutableState
+    interface Listener {
+        fun onStateChanged(state: State)
+    }
 
-    private val mutableTarget = MutableStateFlow<CastDevice?>(null)
-    val target: StateFlow<CastDevice?> = mutableTarget
+    var state by mutableStateOf(State.DISCONNECTED)
+        private set
+
+    var target: CastDevice? by mutableStateOf(null)
+        private set
 
     var lastError by mutableIntStateOf(0)
         private set
 
+    private var listener: Listener? = null
+
+    fun setListener(listener: Listener?) {
+        this.listener = listener
+    }
+
+    private fun dispatchStateChanged() {
+        listener?.onStateChanged(state)
+    }
+
     suspend fun connect(device: CastDevice): Result<Unit> {
-        mutableTarget.value = device
-        mutableState.value = State.CONNECTING
+        target = device
+        state = State.CONNECTING
         lastError = 0
+        dispatchStateChanged()
         val result = backend.connect(device.target)
         if (result.isSuccess) {
-            mutableState.value = State.CONNECTED
+            state = State.CONNECTED
         } else {
-            mutableState.value = State.DISCONNECTED
+            state = State.DISCONNECTED
             lastError = OsConstants.EIO
         }
+        dispatchStateChanged()
         return result
     }
 
     fun disconnect() {
         backend.disconnect()
-        mutableState.value = State.DISCONNECTED
-        mutableTarget.value = null
+        state = State.DISCONNECTED
+        target = null
         lastError = 0
+        dispatchStateChanged()
     }
 }
 
@@ -416,8 +431,6 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         }
     }
     val backendStatus by backend.status.collectAsStateWithLifecycle()
-    val connectionState by connection.state.collectAsStateWithLifecycle()
-    val connectedDevice by connection.target.collectAsStateWithLifecycle()
     val discovery = remember { CastDiscovery(context) }
     val discoveredDevices by discovery.devices.collectAsStateWithLifecycle()
     val coroutineScope = rememberCoroutineScope()
@@ -443,6 +456,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     // Only block polling during restore if we have a saved position to restore.
     // On fresh launch (positionMs=0), no restore needed — start polling immediately.
     var restored by remember { mutableStateOf(positionMs == 0L) }
+    var connectionState by remember { mutableStateOf(connection.state) }
+    var connectedDevice by remember { mutableStateOf(connection.target) }
     val prefs = remember { context.getSharedPreferences("cast_ui", Context.MODE_PRIVATE) }
     var isFullscreen by rememberSaveable {
         mutableStateOf(testFullscreen || prefs.getBoolean("fullscreen", false))
@@ -493,6 +508,19 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     DisposableEffect(discovery) {
         discovery.startDiscovery()
         onDispose { discovery.stopDiscovery() }
+    }
+
+    DisposableEffect(connection) {
+        val listener = object : Connection.Listener {
+            override fun onStateChanged(state: Connection.State) {
+                connectionState = state
+                connectedDevice = connection.target
+            }
+        }
+        connection.setListener(listener)
+        connectionState = connection.state
+        connectedDevice = connection.target
+        onDispose { connection.setListener(null) }
     }
 
     // Auto-load video shared from Gallery or other apps
@@ -673,7 +701,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             }
         }
 
-        if (connectedDevice != null || connectionState == Connection.State.CONNECTING) {
+        if (connectionState != Connection.State.DISCONNECTED) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
