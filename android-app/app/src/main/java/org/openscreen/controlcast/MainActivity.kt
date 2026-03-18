@@ -498,6 +498,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var autoReconnectTargets by remember {
         mutableStateOf(getAutoReconnectTargets(context))
     }
+    val isConnected = connectionState == Connection.State.CONNECTED
+    val isConnecting = connectionState == Connection.State.CONNECTING
 
     // Connect to a device and optionally send the current video.
     fun connectToDevice(device: CastDevice) {
@@ -737,20 +739,17 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             }
         }
 
-        if (connectionState != Connection.State.DISCONNECTED) {
+        if (isConnected || isConnecting) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = when (connectionState) {
-                        Connection.State.CONNECTING ->
-                            "Connecting: ${connectedDevice?.name ?: "device"}"
-                        Connection.State.CONNECTED ->
-                            "Connected: ${connectedDevice?.name ?: "device"}"
-                        Connection.State.DISCONNECTED ->
-                            "Disconnected"
+                    text = if (isConnecting) {
+                        "Connecting: ${connectedDevice?.name ?: "device"}"
+                    } else {
+                        "Connected: ${connectedDevice?.name ?: "device"}"
                     },
                     color = Color(0xFF9CB0C3),
                     style = MaterialTheme.typography.bodyMedium,
@@ -772,14 +771,13 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             )
         } else {
             for (device in discoveredDevices) {
-                val isConnected = device == connectedDevice &&
-                    connectionState == Connection.State.CONNECTED
+                val isCurrentTarget = device == connectedDevice
                 val isAutoReconnect = device.target in autoReconnectTargets
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(
-                            if (isConnected) Color(0xFF1E3A5F)
+                            if (isConnected && isCurrentTarget) Color(0xFF1E3A5F)
                             else Color(0xFF182028),
                             RoundedCornerShape(8.dp),
                         )
@@ -901,7 +899,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             }
         }
 
-        SettingsRow(context, backend, discoveredDevices, connectedDevice?.name, coroutineScope)
+        SettingsRow(context, backend, connectedDevice, coroutineScope)
 
         if (localMirrorEnabled) {
             Box(
@@ -1014,8 +1012,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
 private fun SettingsRow(
     context: Context,
     backend: NativeBackedBackend,
-    discoveredDevices: List<CastDevice>,
-    connectedDevice: String?,
+    connectedDevice: CastDevice?,
     coroutineScope: kotlinx.coroutines.CoroutineScope,
 ) {
     Row(
@@ -1075,9 +1072,7 @@ private fun SettingsRow(
                         syncFile.outputStream().use { output -> input.copyTo(output) }
                     }
                 }
-                val target = connectedDevice?.let {
-                    discoveredDevices.firstOrNull { d -> d.name == it }?.target
-                } ?: ""
+                val target = connectedDevice?.target ?: ""
                 backend.testCast(target, syncFile.absolutePath)
                 coroutineScope.launch {
                     delay(3000)
