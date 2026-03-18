@@ -267,12 +267,6 @@ void StartCastSessionOnTaskRunner(ControllerState& state,
        (long long)state.av_sync_offset_ms,
        video_path.c_str());
   state.connection.cast->Connect(std::move(settings));
-
-  {
-    std::lock_guard<std::mutex> lock(state.mutex);
-    state.connection.connected = true;
-    UpdateStatusLocked(state);
-  }
   LOGI("TaskRunner: connect initiated");
 }
 
@@ -795,8 +789,15 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeIsConnected(
     JNIEnv* env,
     jobject thiz) {
   auto& state = State();
+#ifdef HAVE_OPENSCREEN
+  if (state.connection.cast) {
+    return state.connection.cast->IsConnected() ? JNI_TRUE : JNI_FALSE;
+  }
+  return JNI_FALSE;
+#else
   std::lock_guard<std::mutex> lock(state.mutex);
   return state.connection.connected ? JNI_TRUE : JNI_FALSE;
+#endif
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
@@ -806,11 +807,16 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeIsPlaying(
   auto& state = State();
 #ifdef HAVE_OPENSCREEN
   if (state.connection.cast) {
-    return state.connection.cast->IsPlaying() ? JNI_TRUE : JNI_FALSE;
+    return (state.connection.cast->IsConnected() &&
+            state.connection.cast->IsPlaying())
+               ? JNI_TRUE
+               : JNI_FALSE;
   }
-#endif
+  return JNI_FALSE;
+#else
   std::lock_guard<std::mutex> lock(state.mutex);
   return state.playing ? JNI_TRUE : JNI_FALSE;
+#endif
 }
 
 extern "C" JNIEXPORT jlong JNICALL
@@ -847,5 +853,15 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeGetStatus(
     jobject thiz) {
   auto& state = State();
   std::lock_guard<std::mutex> lock(state.mutex);
+#ifdef HAVE_OPENSCREEN
+  if (state.connection.cast) {
+    state.connection.connected = state.connection.cast->IsConnected();
+    state.playing = state.connection.connected && state.connection.cast->IsPlaying();
+    state.position_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            state.connection.cast->GetCurrentPosition())
+                            .count();
+    UpdateStatusLocked(state);
+  }
+#endif
   return StdStringToJString(env, state.status);
 }

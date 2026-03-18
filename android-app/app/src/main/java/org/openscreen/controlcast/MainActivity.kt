@@ -309,6 +309,10 @@ class NativeBackedBackend : CastControlBackend {
         refreshStatus()
     }
 
+    fun syncStatus() {
+        refreshStatus()
+    }
+
     override fun setMirrorLocally(enabled: Boolean) {
         nativeSetMirrorLocally(enabled)
         refreshStatus()
@@ -401,12 +405,14 @@ class Connection(private val backend: NativeBackedBackend) {
                 if (state == State.CONNECTING && connected) {
                     state = State.CONNECTED
                     lastError = 0
+                    backend.syncStatus()
                     dispatchStateChanged()
                     continue
                 }
                 if (state == State.CONNECTED && !connected) {
                     state = State.DISCONNECTED
                     lastError = OsConstants.EIO
+                    backend.syncStatus()
                     dispatchStateChanged()
                     break
                 }

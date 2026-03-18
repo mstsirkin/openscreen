@@ -55,6 +55,7 @@ class ControllableFileCastAgent final
   void SetAvSyncOffset(Clock::duration offset);
   Clock::duration GetCurrentPosition() const;
   Clock::duration GetDuration() const;
+  bool IsConnected() const;
   bool IsPlaying() const;
 
  private:

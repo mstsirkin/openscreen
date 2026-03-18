@@ -111,11 +111,15 @@ Clock::duration ControllableFileCastAgent::GetDuration() const {
   return Clock::duration::zero();
 }
 
+bool ControllableFileCastAgent::IsConnected() const {
+  return sender_ != nullptr;
+}
+
 bool ControllableFileCastAgent::IsPlaying() const {
   if (sender_) {
     return sender_->is_playing();
   }
-  return !desired_paused_;
+  return false;
 }
 
 void ControllableFileCastAgent::SetAvSyncOffset(Clock::duration offset) {
@@ -292,8 +296,14 @@ void ControllableFileCastAgent::CreateAndStartSession() {
     Shutdown();
     return;
   }
-  environment_ =
-      std::make_unique<Environment>(&Clock::now, task_runner_, IPEndpoint{});
+  // Environment owns one UDP socket, so bind it to the same address family as
+  // the chosen receiver endpoint instead of assuming IPv4.
+  const IPEndpoint local_endpoint =
+      connection_settings_->receiver_endpoint.address.IsV6()
+          ? IPEndpoint::kAnyV6()
+          : IPEndpoint::kAnyV4();
+  environment_ = std::make_unique<Environment>(&Clock::now, task_runner_,
+                                               local_endpoint);
 
   SenderSession::Configuration config{
       connection_settings_->receiver_endpoint.address,

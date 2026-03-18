@@ -11,13 +11,23 @@ data class CastDevice(
     val host: String,
     val port: Int,
 ) {
-    val target: String get() = "$host:$port"
+    val target: String
+        get() {
+            val formattedHost = if (host.contains(":") && !host.startsWith("[")) {
+                "[$host]"
+            } else {
+                host
+            }
+            return "$formattedHost:$port"
+        }
 }
 
 // Discovers Cast receivers on the local network using Android's NsdManager
 // (mDNS/DNS-SD). Looks for "_googlecast._tcp" services, the same service
 // type that x11cast discovers via Open Screen's DnsSdServiceWatcher.
-class CastDiscovery(context: Context) {
+class CastDiscovery(
+    context: Context,
+) {
 
     private val nsdManager =
         context.getSystemService(Context.NSD_SERVICE) as NsdManager
@@ -70,6 +80,10 @@ class CastDiscovery(context: Context) {
         override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {}
 
         override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
+            // TODO: On Android 14+ use NsdServiceInfo.getHostAddresses()
+            // instead of the deprecated single-host API here. That will let
+            // us choose IPv4 vs IPv6 deliberately instead of taking whichever
+            // one resolveService() handed back first.
             val host = serviceInfo.host?.hostAddress ?: return
             val port = serviceInfo.port
             // Cast devices advertise their friendly name in the "fn" TXT
