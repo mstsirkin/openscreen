@@ -45,6 +45,7 @@ struct ConnectionState {
   std::unique_ptr<openscreen::Alarm> reconnect_alarm;
   bool session_restart_posted = false;
   uint64_t desired_session_generation = 0;
+  uint64_t cast_generation = 0;
   bool reconnect_enabled = false;
   std::chrono::milliseconds reconnect_delay = kInitialReconnectDelay;
   std::deque<long long> paused_seek_queue;
@@ -184,10 +185,11 @@ void StartCastSessionOnTaskRunner(ControllerState& state,
 
   LOGI("TaskRunner: creating new agent");
   auto trust_store = openscreen::cast::CastTrustStore::Create();
+  const uint64_t agent_generation = ++state.connection.cast_generation;
   state.connection.cast =
       std::make_unique<openscreen::cast::ControllableFileCastAgent>(
           *state.task_runner, std::move(trust_store),
-          [&state]() {
+          [&state, agent_generation]() {
             LOGI("Agent session ended");
             bool should_retry = false;
             std::string target;
@@ -196,8 +198,11 @@ void StartCastSessionOnTaskRunner(ControllerState& state,
             {
               std::lock_guard<std::mutex> lock(state.mutex);
               state.connection.connected = false;
+              const bool stale_agent =
+                  agent_generation != state.connection.cast_generation;
               UpdateStatusLocked(state);
-              should_retry = state.connection.reconnect_enabled &&
+              should_retry = !stale_agent &&
+                             state.connection.reconnect_enabled &&
                              !state.connection.target.empty() &&
                              !state.video_path.empty();
               target = state.connection.target;
