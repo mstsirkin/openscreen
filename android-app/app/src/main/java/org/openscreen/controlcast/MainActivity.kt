@@ -7,6 +7,7 @@ import android.net.NetworkRequest
 import android.net.Uri
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
+import android.system.OsConstants
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions
@@ -46,6 +47,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,6 +71,8 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -310,6 +314,44 @@ class NativeBackedBackend : CastControlBackend {
     }
 }
 
+class Connection(private val backend: NativeBackedBackend) {
+    enum class State {
+        DISCONNECTED,
+        CONNECTING,
+        CONNECTED,
+    }
+
+    private val mutableState = MutableStateFlow(State.DISCONNECTED)
+    val state: StateFlow<State> = mutableState
+
+    private val mutableTarget = MutableStateFlow<CastDevice?>(null)
+    val target: StateFlow<CastDevice?> = mutableTarget
+
+    var lastError by mutableIntStateOf(0)
+        private set
+
+    suspend fun connect(device: CastDevice): Result<Unit> {
+        mutableTarget.value = device
+        mutableState.value = State.CONNECTING
+        lastError = 0
+        val result = backend.connect(device.target)
+        if (result.isSuccess) {
+            mutableState.value = State.CONNECTED
+        } else {
+            mutableState.value = State.DISCONNECTED
+            lastError = OsConstants.EIO
+        }
+        return result
+    }
+
+    fun disconnect() {
+        backend.disconnect()
+        mutableState.value = State.DISCONNECTED
+        mutableTarget.value = null
+        lastError = 0
+    }
+}
+
 private fun getAutoReconnectTargets(context: Context): Set<String> {
     val prefs = context.getSharedPreferences("cast_devices", Context.MODE_PRIVATE)
     return prefs.getStringSet("auto_reconnect", emptySet()) ?: emptySet()
@@ -328,6 +370,7 @@ private fun setAutoReconnect(context: Context, target: String, enabled: Boolean)
 private fun ControlCastApp(testTarget: String? = null, testFile: String? = null, testCalibrate: Boolean = false, sharedUri: Uri? = null, testFullscreen: Boolean = false) {
     val context = LocalContext.current
     val backend = remember { NativeBackedBackend() }
+    val connection = remember(backend) { Connection(backend) }
 
     // Auto-cast when launched with test extras via adb:
     // adb shell am start -n org.openscreen.controlcast/.MainActivity
@@ -373,6 +416,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         }
     }
     val backendStatus by backend.status.collectAsStateWithLifecycle()
+    val connectionState by connection.state.collectAsStateWithLifecycle()
+    val connectedDevice by connection.target.collectAsStateWithLifecycle()
     val discovery = remember { CastDiscovery(context) }
     val discoveredDevices by discovery.devices.collectAsStateWithLifecycle()
     val coroutineScope = rememberCoroutineScope()
@@ -398,7 +443,6 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     // Only block polling during restore if we have a saved position to restore.
     // On fresh launch (positionMs=0), no restore needed — start polling immediately.
     var restored by remember { mutableStateOf(positionMs == 0L) }
-    var connectedDevice by rememberSaveable { mutableStateOf<String?>(null) }
     val prefs = remember { context.getSharedPreferences("cast_ui", Context.MODE_PRIVATE) }
     var isFullscreen by rememberSaveable {
         mutableStateOf(testFullscreen || prefs.getBoolean("fullscreen", false))
@@ -410,9 +454,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     // Connect to a device and optionally send the current video.
     fun connectToDevice(device: CastDevice) {
         coroutineScope.launch {
-            val result = backend.connect(device.target)
+            val result = connection.connect(device)
             if (result.isSuccess) {
-                connectedDevice = device.name
                 selectedUri?.let { uri ->
                     backend.openVideo(context, uri, localMirrorEnabled)
                 }
@@ -476,9 +519,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         val targets = getAutoReconnectTargets(context)
         val match = discoveredDevices.firstOrNull { it.target in targets }
         if (match != null) {
-            val result = backend.connect(match.target)
+            val result = connection.connect(match)
             if (result.isSuccess) {
-                connectedDevice = match.name
                 selectedUri?.let { uri ->
                     backend.openVideo(context, uri, localMirrorEnabled)
                 }
@@ -635,21 +677,27 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             }
         }
 
-        if (connectedDevice != null) {
+        if (connectedDevice != null || connectionState == Connection.State.CONNECTING) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = "Connected: $connectedDevice",
+                    text = when (connectionState) {
+                        Connection.State.CONNECTING ->
+                            "Connecting: ${connectedDevice?.name ?: "device"}"
+                        Connection.State.CONNECTED ->
+                            "Connected: ${connectedDevice?.name ?: "device"}"
+                        Connection.State.DISCONNECTED ->
+                            "Disconnected"
+                    },
                     color = Color(0xFF9CB0C3),
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.weight(1f),
                 )
                 Button(onClick = {
-                    backend.disconnect()
-                    connectedDevice = null
+                    connection.disconnect()
                 }) {
                     Text("Disconnect")
                 }
@@ -664,7 +712,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             )
         } else {
             for (device in discoveredDevices) {
-                val isConnected = device.name == connectedDevice
+                val isConnected = device == connectedDevice &&
+                    connectionState == Connection.State.CONNECTED
                 val isAutoReconnect = device.target in autoReconnectTargets
                 Row(
                     modifier = Modifier
@@ -792,7 +841,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             }
         }
 
-        SettingsRow(context, backend, discoveredDevices, connectedDevice, coroutineScope)
+        SettingsRow(context, backend, discoveredDevices, connectedDevice?.name, coroutineScope)
 
         if (localMirrorEnabled) {
             Box(
