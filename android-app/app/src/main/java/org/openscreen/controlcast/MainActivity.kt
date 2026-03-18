@@ -375,6 +375,8 @@ class Connection(private val backend: NativeBackedBackend) {
     var target: CastDevice? by mutableStateOf(null)
         private set
 
+    // 0 means clean state / intentional shutdown. Non-zero means the last
+    // disconnect was due to an actual failure and may be surfaced to the UI.
     var lastError by mutableIntStateOf(0)
         private set
 
@@ -552,6 +554,17 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         }
     }
 
+    fun openSelectedVideoOnCast(uri: Uri, startPlaying: Boolean) {
+        if (connectionState != Connection.State.CONNECTED) return
+        backend.openVideo(
+            context,
+            uri,
+            localMirrorEnabled,
+            0L,
+            startPlaying,
+        )
+    }
+
     // Load test file into ExoPlayer for local preview + slider
     LaunchedEffect(testFile, exoPlayer) {
         if (!testFile.isNullOrEmpty() && exoPlayer.mediaItemCount == 0) {
@@ -608,11 +621,22 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     // Auto-load video shared from Gallery or other apps
     LaunchedEffect(sharedUri) {
         if (sharedUri != null) {
+            val shouldStartPlaying = if (connectionState == Connection.State.CONNECTED) {
+                isPlaying
+            } else {
+                localMirrorEnabled
+            }
             selectedUri = sharedUri
             val mediaItem = MediaItem.fromUri(sharedUri)
             exoPlayer.setMediaItem(mediaItem)
             exoPlayer.prepare()
-            if (localMirrorEnabled) exoPlayer.play()
+            if (localMirrorEnabled && shouldStartPlaying) {
+                exoPlayer.play()
+            } else {
+                exoPlayer.pause()
+            }
+            isPlaying = shouldStartPlaying
+            openSelectedVideoOnCast(sharedUri, shouldStartPlaying)
         }
     }
 
@@ -627,7 +651,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         }
     }
 
-    LaunchedEffect(connectionState, selectedUri) {
+    LaunchedEffect(connectionState) {
         if (connectionState == Connection.State.CONNECTED) {
             selectedUri?.let { uri ->
                 val startPositionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
@@ -705,6 +729,11 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
 
     val openVideoLauncher = rememberLauncherForActivityResult(OpenDocument()) { uri ->
         if (uri != null) {
+            val shouldStartPlaying = if (connectionState == Connection.State.CONNECTED) {
+                isPlaying
+            } else {
+                localMirrorEnabled
+            }
             context.contentResolver.takePersistableUriPermission(
                 uri,
                 android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
@@ -713,9 +742,13 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             val mediaItem = MediaItem.fromUri(uri)
             exoPlayer.setMediaItem(mediaItem)
             exoPlayer.prepare()
-            if (localMirrorEnabled) {
+            if (localMirrorEnabled && shouldStartPlaying) {
                 exoPlayer.play()
+            } else {
+                exoPlayer.pause()
             }
+            isPlaying = shouldStartPlaying
+            openSelectedVideoOnCast(uri, shouldStartPlaying)
         }
     }
 
