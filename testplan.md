@@ -69,3 +69,18 @@ Steps:
 Expected:
 - `Connection.state` leaves `CONNECTED`.
 - UI no longer claims an active connected session once Cast is gone.
+
+## Latest Execution Notes
+
+### 2026-03-18 Samsung run
+
+- T1: PASS
+  - Verified by adb-driven picker flow, device-row tap, app UI showing `Connected`, and camera screenshot confirming the TV was showing the selected video instead of the home screen.
+- T2: NOT YET VERIFIED
+  - The ad-hoc picker automation became flaky when re-entering the picker from a connected session, so this needs a cleaner rerun.
+- T3: NOT YET VERIFIED
+  - Same reason as T2; needs a dedicated paused-connect run.
+- T4: NOT YET VERIFIED
+  - EOF native fix is implemented locally, but the current UI automation path still needs a reliable way to drive seek-back after EOF.
+- T5: NOT YET VERIFIED
+  - Not exercised in this run.
