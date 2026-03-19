@@ -550,25 +550,36 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var autoReconnectTargets by remember {
         mutableStateOf(getAutoReconnectTargets(context))
     }
+    var castOpenedUri by rememberSaveable { mutableStateOf<String?>(null) }
     val isConnected = connectionState == Connection.State.CONNECTED
     val isConnecting = connectionState == Connection.State.CONNECTING
 
-    // Connect to a device and optionally send the current video.
-    fun connectToDevice(device: CastDevice) {
-        coroutineScope.launch {
-            connection.connect(device)
-        }
-    }
-
-    fun openSelectedVideoOnCast(uri: Uri, startPlaying: Boolean) {
-        if (connectionState != Connection.State.CONNECTED) return
+    fun openSelectedVideoOnCast(uri: Uri, startPlaying: Boolean, startPositionMs: Long = 0L) {
+        if (connectedDevice == null || connectionState == Connection.State.DISCONNECTED) return
         backend.openVideo(
             context,
             uri,
             localMirrorEnabled,
-            0L,
+            startPositionMs,
             startPlaying,
         )
+        castOpenedUri = uri.toString()
+    }
+
+    // Connect to a device and optionally send the current video.
+    fun connectToDevice(device: CastDevice) {
+        coroutineScope.launch {
+            val result = connection.connect(device)
+            if (result.isSuccess) {
+                selectedUri?.let { uri ->
+                    openSelectedVideoOnCast(
+                        uri,
+                        exoPlayer.isPlaying,
+                        exoPlayer.currentPosition.coerceAtLeast(0L),
+                    )
+                }
+            }
+        }
     }
 
     // Load test file into ExoPlayer for local preview + slider
@@ -613,6 +624,9 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             override fun onStateChanged(state: Connection.State) {
                 connectionState = state
                 connectedDevice = connection.target
+                if (state == Connection.State.DISCONNECTED) {
+                    castOpenedUri = null
+                }
             }
         }
         connection.setListener(listener)
@@ -657,18 +671,17 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         }
     }
 
-    LaunchedEffect(connectionState) {
-        if (connectionState == Connection.State.CONNECTED) {
+    LaunchedEffect(connectionState, connectedDevice, selectedUri) {
+        if (connectedDevice != null && connectionState != Connection.State.DISCONNECTED) {
             selectedUri?.let { uri ->
-                val startPositionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
-                val startPlaying = exoPlayer.isPlaying
-                backend.openVideo(
-                    context,
-                    uri,
-                    localMirrorEnabled,
-                    startPositionMs,
-                    startPlaying,
-                )
+                val uriString = uri.toString()
+                if (castOpenedUri != uriString) {
+                    openSelectedVideoOnCast(
+                        uri,
+                        exoPlayer.isPlaying,
+                        exoPlayer.currentPosition.coerceAtLeast(0L),
+                    )
+                }
             }
         }
     }
