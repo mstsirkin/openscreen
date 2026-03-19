@@ -369,10 +369,6 @@ class Connection(private val backend: NativeBackedBackend) {
         CONNECTED,
     }
 
-    interface Listener {
-        fun onStateChanged(state: State)
-    }
-
     var state by mutableStateOf(State.DISCONNECTED)
         private set
 
@@ -384,36 +380,24 @@ class Connection(private val backend: NativeBackedBackend) {
     var lastError by mutableIntStateOf(0)
         private set
 
-    private var listener: Listener? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var monitorJob: Job? = null
-
-    fun setListener(listener: Listener?) {
-        this.listener = listener
-    }
-
-    private fun dispatchStateChanged() {
-        listener?.onStateChanged(state)
-    }
 
     private fun startMonitoring() {
         monitorJob?.cancel()
         monitorJob = scope.launch {
             while (isActive && state != State.DISCONNECTED) {
                 delay(500)
+                backend.syncStatus()
                 val connected = backend.isConnected()
                 if (state == State.CONNECTING && connected) {
                     state = State.CONNECTED
                     lastError = 0
-                    backend.syncStatus()
-                    dispatchStateChanged()
                     continue
                 }
                 if (state == State.CONNECTED && !connected) {
                     state = State.DISCONNECTED
                     lastError = OsConstants.EIO
-                    backend.syncStatus()
-                    dispatchStateChanged()
                     break
                 }
             }
@@ -424,7 +408,6 @@ class Connection(private val backend: NativeBackedBackend) {
         target = device
         state = State.CONNECTING
         lastError = 0
-        dispatchStateChanged()
         val result = backend.connect(device.target)
         if (result.isSuccess) {
             backend.syncStatus()
@@ -437,7 +420,6 @@ class Connection(private val backend: NativeBackedBackend) {
             state = State.DISCONNECTED
             lastError = OsConstants.EIO
         }
-        dispatchStateChanged()
         return result
     }
 
@@ -448,7 +430,6 @@ class Connection(private val backend: NativeBackedBackend) {
         state = State.DISCONNECTED
         target = null
         lastError = 0
-        dispatchStateChanged()
     }
 
     fun dispose() {
@@ -587,8 +568,6 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     // Only block polling during restore if we have a saved position to restore.
     // On fresh launch (positionMs=0), no restore needed — start polling immediately.
     var restored by remember { mutableStateOf(positionMs == 0L) }
-    var connectionState by remember { mutableStateOf(connection.state) }
-    var connectedDevice by remember { mutableStateOf(connection.target) }
     val prefs = remember { context.getSharedPreferences("cast_ui", Context.MODE_PRIVATE) }
     var isFullscreen by rememberSaveable {
         mutableStateOf(testFullscreen || prefs.getBoolean("fullscreen", false))
@@ -597,6 +576,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         mutableStateOf(getAutoReconnectTargets(context))
     }
     var castOpenedUri by rememberSaveable { mutableStateOf<String?>(null) }
+    val connectionState = connection.state
+    val connectedDevice = connection.target
     val isConnected = connectionState == Connection.State.CONNECTED
     val isConnecting = connectionState == Connection.State.CONNECTING
     val connectionStatusText = when (connectionState) {
@@ -668,21 +649,14 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         onDispose { discovery.stopDiscovery() }
     }
 
-    DisposableEffect(connection) {
-        val listener = object : Connection.Listener {
-            override fun onStateChanged(state: Connection.State) {
-                connectionState = state
-                connectedDevice = connection.target
-                if (state == Connection.State.DISCONNECTED) {
-                    castOpenedUri = null
-                }
-            }
+    LaunchedEffect(connectionState) {
+        if (connectionState == Connection.State.DISCONNECTED) {
+            castOpenedUri = null
         }
-        connection.setListener(listener)
-        connectionState = connection.state
-        connectedDevice = connection.target
+    }
+
+    DisposableEffect(connection) {
         onDispose {
-            connection.setListener(null)
             connection.dispose()
         }
     }
