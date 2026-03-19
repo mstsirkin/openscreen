@@ -389,16 +389,16 @@ class Connection(private val backend: NativeBackedBackend) {
             while (isActive && state != State.DISCONNECTED) {
                 delay(500)
                 backend.syncStatus()
-                val connected = backend.isConnected()
-                if (state == State.CONNECTING && connected) {
+                val connected =
+                    backend.isConnected() || backend.status.value.startsWith("Connected to ")
+                if (connected) {
                     state = State.CONNECTED
                     lastError = 0
                     continue
                 }
-                if (state == State.CONNECTED && !connected) {
-                    state = State.DISCONNECTED
-                    lastError = OsConstants.EIO
-                    break
+                if (target != null) {
+                    state = State.CONNECTING
+                    continue
                 }
             }
         }
