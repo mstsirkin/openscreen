@@ -466,6 +466,22 @@ class Connection(private val backend: NativeBackedBackend) {
             startPlaying,
         )
     }
+
+    fun play() {
+        backend.play()
+    }
+
+    fun pause() {
+        backend.pause()
+    }
+
+    fun seekTo(positionMs: Long) {
+        backend.seekTo(positionMs)
+    }
+
+    fun updateViewport(viewport: ViewportState) {
+        backend.updateViewport(viewport)
+    }
 }
 
 private fun getAutoReconnectTargets(context: Context): Set<String> {
@@ -794,12 +810,12 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         FullscreenPlayer(
             exoPlayer = exoPlayer,
             viewport = viewport,
-            onViewportChange = { viewport = it; backend.updateViewport(it) },
+            onViewportChange = { viewport = it; connection.updateViewport(it) },
             isPlaying = isPlaying,
             onPlayPause = {
                 try {
-                    if (isPlaying) { exoPlayer.pause(); backend.pause() }
-                    else { exoPlayer.play(); backend.play() }
+                    if (isPlaying) { exoPlayer.pause(); connection.pause() }
+                    else { exoPlayer.play(); connection.play() }
                     isPlaying = !isPlaying
                 } catch (_: Exception) {}
             },
@@ -808,10 +824,10 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 sliderDragging = true; sliderValue = it; positionMs = (durationMs * it).toLong()
                 val now = System.currentTimeMillis()
                 if (now - lastSeekMs > 200) {
-                    lastSeekMs = now; exoPlayer.seekTo(positionMs); backend.seekTo(positionMs)
+                    lastSeekMs = now; exoPlayer.seekTo(positionMs); connection.seekTo(positionMs)
                 }
             },
-            onSliderFinished = { sliderDragging = false; exoPlayer.seekTo(positionMs); backend.seekTo(positionMs) },
+            onSliderFinished = { sliderDragging = false; exoPlayer.seekTo(positionMs); connection.seekTo(positionMs) },
             sliderEnabled = durationMs > 0L,
             positionMs = positionMs,
             durationMs = durationMs,
@@ -965,10 +981,10 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 onClick = {
                     if (isPlaying) {
                         exoPlayer.pause()
-                        backend.pause()
+                        connection.pause()
                     } else {
                         exoPlayer.play()
-                        backend.play()
+                        connection.play()
                     }
                     isPlaying = !isPlaying
                 },
@@ -990,9 +1006,9 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         ) {
             Switch(
                 checked = localMirrorEnabled,
-                onCheckedChange = {
-                    localMirrorEnabled = it
-                    backend.setMirrorLocally(it)
+                    onCheckedChange = {
+                        localMirrorEnabled = it
+                        backend.setMirrorLocally(it)
                     if (!it) {
                         exoPlayer.pause()
                     }
@@ -1056,7 +1072,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                                     .coerceIn(-1200f, 1200f),
                             )
                             viewport = nextViewport
-                            backend.updateViewport(nextViewport)
+                            connection.updateViewport(nextViewport)
                         }
                     },
                 contentAlignment = Alignment.Center,
@@ -1122,13 +1138,13 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                     if (now - lastSeekMs > 200) {
                         lastSeekMs = now
                         exoPlayer.seekTo(positionMs)
-                        backend.seekTo(positionMs)
+                        connection.seekTo(positionMs)
                     }
                 },
                 onValueChangeFinished = {
                     sliderDragging = false
                     exoPlayer.seekTo(positionMs)
-                    backend.seekTo(positionMs)
+                    connection.seekTo(positionMs)
                 },
                 enabled = durationMs > 0L,
             )
