@@ -488,6 +488,9 @@ class Connection(private val backend: NativeBackedBackend) {
     fun getCastDurationMs(): Long = backend.getCastDurationMs()
 
     fun isCastPlaying(): Boolean = backend.isCastPlaying()
+
+    val status: kotlinx.coroutines.flow.StateFlow<String>
+        get() = backend.status
 }
 
 private fun getAutoReconnectTargets(context: Context): Set<String> {
@@ -553,7 +556,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             }
         }
     }
-    val backendStatus by backend.status.collectAsStateWithLifecycle()
+    val backendStatus by connection.status.collectAsStateWithLifecycle()
     val discovery = remember { CastDiscovery(context) }
     val discoveredDevices by discovery.devices.collectAsStateWithLifecycle()
     val coroutineScope = rememberCoroutineScope()
