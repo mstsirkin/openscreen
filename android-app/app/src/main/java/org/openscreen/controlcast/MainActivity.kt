@@ -819,6 +819,12 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         )
 
         Text(
+            text = "Build ${BuildConfig.GIT_HEAD} ${BuildConfig.GIT_SUBJECT}",
+            color = Color(0xFF7F93A7),
+            style = MaterialTheme.typography.bodySmall,
+        )
+
+        Text(
             text = backendStatus,
             color = Color(0xFF9CB0C3),
             style = MaterialTheme.typography.bodyMedium,

@@ -5,6 +5,7 @@ plugins {
 
 import org.gradle.api.tasks.Copy
 import java.security.MessageDigest
+import java.io.ByteArrayOutputStream
 
 fun sha256(file: File): String {
     val digest = MessageDigest.getInstance("SHA-256")
@@ -19,6 +20,46 @@ fun sha256(file: File): String {
     return digest.digest().joinToString("") { "%02x".format(it) }
 }
 
+fun gitHeadShort(root: File): String {
+    val stdout = ByteArrayOutputStream()
+    val result = exec {
+        workingDir = root
+        commandLine("git", "rev-parse", "--short=12", "HEAD")
+        standardOutput = stdout
+        isIgnoreExitValue = true
+    }
+    return if (result.exitValue == 0) {
+        stdout.toString().trim().ifEmpty { "unknown" }
+    } else {
+        "unknown"
+    }
+}
+
+fun gitHeadSubject(root: File): String {
+    val stdout = ByteArrayOutputStream()
+    val result = exec {
+        workingDir = root
+        commandLine("git", "log", "-1", "--pretty=%s")
+        standardOutput = stdout
+        isIgnoreExitValue = true
+    }
+    return if (result.exitValue == 0) {
+        stdout.toString().trim().ifEmpty { "unknown" }
+    } else {
+        "unknown"
+    }
+}
+
+fun javaStringLiteral(value: String): String =
+    value.replace("\\", "\\\\").replace("\"", "\\\"")
+
+fun versionSafe(value: String): String =
+    value.replace(Regex("\\s+"), "_").replace(Regex("[^A-Za-z0-9._+-]"), "-")
+
+val gitHead = gitHeadShort(rootProject.projectDir.parentFile)
+val gitSubject = gitHeadSubject(rootProject.projectDir.parentFile)
+val gitSubjectForVersion = versionSafe(gitSubject)
+
 android {
     namespace = "org.openscreen.controlcast"
     compileSdk = 35
@@ -28,7 +69,9 @@ android {
         minSdk = 29
         targetSdk = 35
         versionCode = 1
-        versionName = "0.1"
+        versionName = "0.1+$gitHead+$gitSubjectForVersion"
+        buildConfigField("String", "GIT_HEAD", "\"${javaStringLiteral(gitHead)}\"")
+        buildConfigField("String", "GIT_SUBJECT", "\"${javaStringLiteral(gitSubject)}\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -57,6 +100,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     composeOptions {
@@ -72,6 +116,9 @@ android {
 
 val controlcastSo = rootProject.file("../out/android/libcontrolcast.so")
 val packagedControlcastSo = project.file("src/main/jniLibs/arm64-v8a/libcontrolcast.so")
+val debugApk = project.layout.buildDirectory.file("outputs/apk/debug/app-debug.apk")
+val archivedDebugApk =
+    rootProject.projectDir.parentFile.resolve("archive/castcontrol-$gitHead.apk")
 
 val syncControlcastJniLib by tasks.registering(Copy::class) {
     group = "build"
@@ -103,6 +150,17 @@ val verifyControlcastJniLib by tasks.registering {
     }
 }
 
+val archiveDebugApk by tasks.registering(Copy::class) {
+    group = "build"
+    description = "Copy the debug APK to archive/castcontrol-<git-hash>.apk."
+    from(debugApk)
+    into(archivedDebugApk.parentFile)
+    rename { archivedDebugApk.name }
+    doFirst {
+        archivedDebugApk.parentFile.mkdirs()
+    }
+}
+
 tasks.matching {
     it.name in setOf(
         "mergeDebugJniLibFolders",
@@ -113,6 +171,15 @@ tasks.matching {
     )
 }.configureEach {
     dependsOn(syncControlcastJniLib, verifyControlcastJniLib)
+}
+
+tasks.matching {
+    it.name in setOf(
+        "assembleDebug",
+        "packageDebug",
+    )
+}.configureEach {
+    finalizedBy(archiveDebugApk)
 }
 
 dependencies {
