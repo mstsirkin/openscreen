@@ -178,6 +178,9 @@ void StartCastSessionOnTaskRunner(ControllerState& state,
     state.connection.reconnect_alarm->Cancel();
   }
   state.connection.reconnect_delay = kInitialReconnectDelay;
+  // Bump generation before destroying the old agent so its session-ended
+  // callback is treated as stale and does not schedule a reconnect retry.
+  const uint64_t agent_generation = ++state.connection.cast_generation;
   LOGI("TaskRunner: stopping old agent");
   // Properly destroy the old agent. Its encoder destructor joins
   // the encode thread, so no more tasks will be posted after this.
@@ -185,7 +188,6 @@ void StartCastSessionOnTaskRunner(ControllerState& state,
 
   LOGI("TaskRunner: creating new agent");
   auto trust_store = openscreen::cast::CastTrustStore::Create();
-  const uint64_t agent_generation = ++state.connection.cast_generation;
   state.connection.cast =
       std::make_unique<openscreen::cast::ControllableFileCastAgent>(
           *state.task_runner, std::move(trust_store),
