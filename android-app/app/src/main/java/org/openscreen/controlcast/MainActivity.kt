@@ -555,7 +555,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     val isConnecting = connectionState == Connection.State.CONNECTING
 
     fun openSelectedVideoOnCast(uri: Uri, startPlaying: Boolean, startPositionMs: Long = 0L) {
-        if (connectedDevice == null || connectionState == Connection.State.DISCONNECTED) return
+        if (connectedDevice == null || connectionState != Connection.State.CONNECTED) return
         backend.openVideo(
             context,
             uri,
@@ -569,16 +569,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     // Connect to a device and optionally send the current video.
     fun connectToDevice(device: CastDevice) {
         coroutineScope.launch {
-            val result = connection.connect(device)
-            if (result.isSuccess) {
-                selectedUri?.let { uri ->
-                    openSelectedVideoOnCast(
-                        uri,
-                        exoPlayer.isPlaying,
-                        exoPlayer.currentPosition.coerceAtLeast(0L),
-                    )
-                }
-            }
+            connection.connect(device)
         }
     }
 
@@ -656,7 +647,9 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 exoPlayer.pause()
             }
             isPlaying = shouldStartPlaying
-            openSelectedVideoOnCast(sharedUri, shouldStartPlaying)
+            if (connectionState == Connection.State.CONNECTED) {
+                openSelectedVideoOnCast(sharedUri, shouldStartPlaying)
+            }
         }
     }
 
@@ -672,7 +665,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     }
 
     LaunchedEffect(connectionState, connectedDevice, selectedUri) {
-        if (connectedDevice != null && connectionState != Connection.State.DISCONNECTED) {
+        if (connectedDevice != null && connectionState == Connection.State.CONNECTED) {
             selectedUri?.let { uri ->
                 val uriString = uri.toString()
                 if (castOpenedUri != uriString) {
@@ -767,7 +760,9 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 exoPlayer.pause()
             }
             isPlaying = shouldStartPlaying
-            openSelectedVideoOnCast(uri, shouldStartPlaying)
+            if (connectionState == Connection.State.CONNECTED) {
+                openSelectedVideoOnCast(uri, shouldStartPlaying)
+            }
         }
     }
 
