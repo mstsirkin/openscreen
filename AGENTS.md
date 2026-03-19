@@ -23,3 +23,4 @@ For android build gradle from android-app
   - note: at end of video it will not move so you have to
     act quickly and if not moving check that!
   - even video if necessary
+  - you can check video length for EOF
