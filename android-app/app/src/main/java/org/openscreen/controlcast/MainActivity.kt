@@ -553,6 +553,14 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var castOpenedUri by rememberSaveable { mutableStateOf<String?>(null) }
     val isConnected = connectionState == Connection.State.CONNECTED
     val isConnecting = connectionState == Connection.State.CONNECTING
+    val connectionStatusText = when (connectionState) {
+        Connection.State.DISCONNECTED ->
+            connectedDevice?.target?.let { "Not connected. Target: $it" } ?: "Not connected."
+        Connection.State.CONNECTING ->
+            "Connecting to ${connectedDevice?.target ?: connectedDevice?.name ?: "device"}"
+        Connection.State.CONNECTED ->
+            "Connected to ${connectedDevice?.target ?: connectedDevice?.name ?: "device"}"
+    }
 
     fun openSelectedVideoOnCast(uri: Uri, startPlaying: Boolean, startPositionMs: Long = 0L) {
         if (connectedDevice == null || connectionState != Connection.State.CONNECTED) return
@@ -820,9 +828,15 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         )
 
         Text(
-            text = backendStatus,
+            text = connectionStatusText,
             color = Color(0xFF9CB0C3),
             style = MaterialTheme.typography.bodyMedium,
+        )
+
+        Text(
+            text = "Native: $backendStatus",
+            color = Color(0xFF6B7F8E),
+            style = MaterialTheme.typography.bodySmall,
         )
 
         // Device discovery section
