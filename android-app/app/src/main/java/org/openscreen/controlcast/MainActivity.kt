@@ -482,6 +482,12 @@ class Connection(private val backend: NativeBackedBackend) {
     fun updateViewport(viewport: ViewportState) {
         backend.updateViewport(viewport)
     }
+
+    fun getCastPositionMs(): Long = backend.getCastPositionMs()
+
+    fun getCastDurationMs(): Long = backend.getCastDurationMs()
+
+    fun isCastPlaying(): Boolean = backend.isCastPlaying()
 }
 
 private fun getAutoReconnectTargets(context: Context): Set<String> {
@@ -734,13 +740,13 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 }
                 durationMs = exoPlayer.duration.coerceAtLeast(0L)
                 // Get position from Cast if running, else use saved
-                val castPos = backend.getCastPositionMs()
+                val castPos = connection.getCastPositionMs()
                 if (castPos > 0) positionMs = castPos
                 exoPlayer.seekTo(positionMs)
                 sliderValue = if (durationMs > 0L) positionMs.toFloat() / durationMs.toFloat() else 0f
                 exoPlayer.volume = if (localSoundEnabled) 1f else 0f
                 // Query Cast backend for play state — it survives rotation
-                val castPlaying = backend.isCastPlaying()
+                val castPlaying = connection.isCastPlaying()
                 if (castPlaying) {
                     exoPlayer.play()
                     isPlaying = true
@@ -755,14 +761,14 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             durationMs = if (exoPlayer.mediaItemCount > 0) {
                 exoPlayer.duration.coerceAtLeast(0L)
             } else {
-                backend.getCastDurationMs().coerceAtLeast(0L)
+                connection.getCastDurationMs().coerceAtLeast(0L)
             }
             if (!sliderDragging && restored) {
                 // Use ExoPlayer position if loaded, else Cast position
                 positionMs = if (exoPlayer.mediaItemCount > 0) {
                     exoPlayer.currentPosition.coerceAtLeast(0L)
                 } else {
-                    backend.getCastPositionMs().coerceAtLeast(0L)
+                    connection.getCastPositionMs().coerceAtLeast(0L)
                 }
                 sliderValue = if (durationMs > 0L) {
                     positionMs.toFloat() / durationMs.toFloat()
@@ -773,7 +779,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             isPlaying = if (exoPlayer.mediaItemCount > 0) {
                 exoPlayer.isPlaying
             } else {
-                backend.isCastPlaying()
+                connection.isCastPlaying()
             }
             delay(200)
         }
