@@ -374,47 +374,124 @@ void ControllableFileSender::PrepareBaseVideoFrame(
   std::memset(padded_u_.data(), 128, padded_u_.size());
   std::memset(padded_v_.data(), 128, padded_v_.size());
 
-  int dst_w = src_w;
-  int dst_h = src_h;
-  if (src_w * kDisplayHeight > src_h * kDisplayWidth) {
-    dst_w = kDisplayWidth;
-    dst_h = RoundToEven(src_h * kDisplayWidth / src_w);
+  const bool quarter_turn = rotation == 90 || rotation == 270;
+  const int display_src_w = quarter_turn ? src_h : src_w;
+  const int display_src_h = quarter_turn ? src_w : src_h;
+
+  int display_dst_w = display_src_w;
+  int display_dst_h = display_src_h;
+  if (display_src_w * kDisplayHeight > display_src_h * kDisplayWidth) {
+    display_dst_w = kDisplayWidth;
+    display_dst_h = RoundToEven(display_src_h * kDisplayWidth / display_src_w);
   } else {
-    dst_h = kDisplayHeight;
-    dst_w = RoundToEven(src_w * kDisplayHeight / src_h);
+    display_dst_h = kDisplayHeight;
+    display_dst_w = RoundToEven(display_src_w * kDisplayHeight / display_src_h);
   }
 
-  const int x_off = (kDisplayWidth - dst_w) / 2;
-  const int y_off = (kDisplayHeight - dst_h) / 2;
+  const int x_off = (kDisplayWidth - display_dst_w) / 2;
+  const int y_off = (kDisplayHeight - display_dst_h) / 2;
+
+  const int scale_dst_w = quarter_turn ? display_dst_h : display_dst_w;
+  const int scale_dst_h = quarter_turn ? display_dst_w : display_dst_h;
 
   viewport_scaler_ = sws_getCachedContext(
-      viewport_scaler_, src_w, src_h, AV_PIX_FMT_YUV420P, dst_w, dst_h,
-      AV_PIX_FMT_YUV420P, SWS_BILINEAR, nullptr, nullptr, nullptr);
+      viewport_scaler_, src_w, src_h, AV_PIX_FMT_YUV420P, scale_dst_w,
+      scale_dst_h, AV_PIX_FMT_YUV420P, SWS_BILINEAR, nullptr, nullptr, nullptr);
   OSP_CHECK(viewport_scaler_);
 
   const uint8_t* src_planes[] = {src_y, src_u, src_v};
   const int src_strides[] = {src_y_stride, src_u_stride, src_v_stride};
-  uint8_t* dst_planes[] = {
-      padded_y_.data() + y_off * kDisplayWidth + x_off,
-      padded_u_.data() + (y_off / 2) * (kDisplayWidth / 2) + x_off / 2,
-      padded_v_.data() + (y_off / 2) * (kDisplayWidth / 2) + x_off / 2,
+  scaled_y_.resize(scale_dst_w * scale_dst_h);
+  scaled_u_.resize((scale_dst_w / 2) * (scale_dst_h / 2));
+  scaled_v_.resize((scale_dst_w / 2) * (scale_dst_h / 2));
+  uint8_t* scaled_planes[] = {
+      scaled_y_.data(),
+      scaled_u_.data(),
+      scaled_v_.data(),
   };
-  const int dst_strides[] = {kDisplayWidth, kDisplayWidth / 2,
-                             kDisplayWidth / 2};
+  const int scaled_strides[] = {scale_dst_w, scale_dst_w / 2, scale_dst_w / 2};
 
-  sws_scale(viewport_scaler_, src_planes, src_strides, 0, src_h, dst_planes,
-            dst_strides);
+  sws_scale(viewport_scaler_, src_planes, src_strides, 0, src_h, scaled_planes,
+            scaled_strides);
+
+  if (rotation == 0) {
+    for (int row = 0; row < scale_dst_h; ++row) {
+      std::memcpy(padded_y_.data() + (y_off + row) * kDisplayWidth + x_off,
+                  scaled_y_.data() + row * scale_dst_w, scale_dst_w);
+    }
+    for (int row = 0; row < scale_dst_h / 2; ++row) {
+      std::memcpy(padded_u_.data() + (y_off / 2 + row) * (kDisplayWidth / 2) +
+                      x_off / 2,
+                  scaled_u_.data() + row * (scale_dst_w / 2), scale_dst_w / 2);
+      std::memcpy(padded_v_.data() + (y_off / 2 + row) * (kDisplayWidth / 2) +
+                      x_off / 2,
+                  scaled_v_.data() + row * (scale_dst_w / 2), scale_dst_w / 2);
+    }
+  } else {
+    RotateI420IntoPadded(rotation, scale_dst_w, scale_dst_h, x_off, y_off);
+  }
 
   frame->width = kDisplayWidth;
   frame->height = kDisplayHeight;
   frame->duration = milliseconds(33);
-  frame->rotation_degrees = rotation;
+  frame->rotation_degrees = 0;
   frame->yuv_planes[0] = padded_y_.data();
   frame->yuv_planes[1] = padded_u_.data();
   frame->yuv_planes[2] = padded_v_.data();
   frame->yuv_strides[0] = kDisplayWidth;
   frame->yuv_strides[1] = kDisplayWidth / 2;
   frame->yuv_strides[2] = kDisplayWidth / 2;
+}
+
+void ControllableFileSender::RotateI420IntoPadded(int rotation_degrees,
+                                                  int src_w,
+                                                  int src_h,
+                                                  int dst_x,
+                                                  int dst_y_offset) {
+  auto rotate_plane = [&](const uint8_t* src,
+                          int src_stride,
+                          int width,
+                          int height,
+                          uint8_t* dst,
+                          int dst_stride) {
+    switch (rotation_degrees) {
+      case 90:
+        for (int y = 0; y < height; ++y) {
+          for (int x = 0; x < width; ++x) {
+            dst[x * dst_stride + (height - 1 - y)] = src[y * src_stride + x];
+          }
+        }
+        break;
+      case 180:
+        for (int y = 0; y < height; ++y) {
+          for (int x = 0; x < width; ++x) {
+            dst[(height - 1 - y) * dst_stride + (width - 1 - x)] =
+                src[y * src_stride + x];
+          }
+        }
+        break;
+      case 270:
+        for (int y = 0; y < height; ++y) {
+          for (int x = 0; x < width; ++x) {
+            dst[(width - 1 - x) * dst_stride + y] = src[y * src_stride + x];
+          }
+        }
+        break;
+      default:
+        break;
+    }
+  };
+
+  uint8_t* dst_y = padded_y_.data() + dst_y_offset * kDisplayWidth + dst_x;
+  uint8_t* dst_u =
+      padded_u_.data() + (dst_y_offset / 2) * (kDisplayWidth / 2) + dst_x / 2;
+  uint8_t* dst_v =
+      padded_v_.data() + (dst_y_offset / 2) * (kDisplayWidth / 2) + dst_x / 2;
+  rotate_plane(scaled_y_.data(), src_w, src_w, src_h, dst_y, kDisplayWidth);
+  rotate_plane(scaled_u_.data(), src_w / 2, src_w / 2, src_h / 2, dst_u,
+               kDisplayWidth / 2);
+  rotate_plane(scaled_v_.data(), src_w / 2, src_w / 2, src_h / 2, dst_v,
+               kDisplayWidth / 2);
 }
 
 void ControllableFileSender::ApplyViewportTransform(

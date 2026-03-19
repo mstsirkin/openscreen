@@ -88,6 +88,11 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
   void PrepareBaseVideoFrame(const AVFrame& av_frame,
                              StreamingVideoEncoder::VideoFrame* frame);
   void ApplyViewportTransform(StreamingVideoEncoder::VideoFrame* frame);
+  void RotateI420IntoPadded(int rotation_degrees,
+                            int src_w,
+                            int src_h,
+                            int dst_x,
+                            int dst_y);
 
   Environment& env_;
   ConnectionSettings settings_;
@@ -121,6 +126,9 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
   std::vector<uint8_t> padded_y_;
   std::vector<uint8_t> padded_u_;
   std::vector<uint8_t> padded_v_;
+  std::vector<uint8_t> scaled_y_;
+  std::vector<uint8_t> scaled_u_;
+  std::vector<uint8_t> scaled_v_;
   std::vector<uint8_t> transformed_y_;
   std::vector<uint8_t> transformed_u_;
   std::vector<uint8_t> transformed_v_;

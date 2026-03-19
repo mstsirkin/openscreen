@@ -1,0 +1,29 @@
+ControlCast TODO
+
+- Fix rotated-video Cast playback so portrait videos both orient correctly and sustain real-time playback on the Samsung hardware path.
+- Keep non-rotated videos on the existing hardware byte-buffer path; do not regress their quality or throughput.
+- Make paused/still Cast sessions stay alive by sending low-rate media-layer keepalive refreshes while paused, including at EOF.
+- Fix the connect-first/no-file-yet idle case so a user can connect and then take time picking a file without the TV session timing out.
+- Fix paused-preview dragging so the TV keeps up better and does not freeze or replay stale positions after release.
+- Fix post-release TV/phone desync after paused dragging.
+- Fix reconnect/session state ownership so UI uses `Connection.state` as the source of truth and `NativeBackedBackend` lives inside `Connection`.
+- Remove contradictory UI states such as showing both `Connected` and `Connecting` at once.
+- Fix detection of unexpected Cast disconnects so the phone notices TV/session loss promptly and cleanly.
+- Fix reconnect/open-video behavior so reconnect does not restart media from `0` or otherwise preserve the wrong state.
+- Fix EOF seek-back behavior so seeking back from the end reliably restores paused preview and playback on TV.
+- Fix play/pause button state bouncing during seek/buffering transitions.
+- Fix slider authority/state so progress, dragging, and restore paths do not freeze or use stale values.
+- Fix portrait/rotation handling without CPU frame rotation; keep hardware encode.
+- Explore a full hardware decode + hardware encode pipeline for Android file casting, especially for rotated/portrait videos and accurate paused preview behavior.
+- Target a hardware decode -> hardware transform -> hardware encode pipeline on Android:
+  - rotation/scale/crop/letterbox/viewport in the transform stage
+  - avoid CPU pixel copies where possible
+  - keep non-rotated playback fast too
+- As a fallback experiment, try FFmpeg/libavfilter autorotate/transpose for rotated inputs only and measure whether performance is acceptable on device.
+- Keep build/install provenance visible:
+  - app UI shows `HEAD` hash and subject
+  - build output archives `archive/castcontrol-<hash>.apk`
+- Follow testing discipline from `AGENTS.md`:
+  - real taps by default
+  - screenshot before and after each tap/scroll
+  - verify app state before switching to camera
