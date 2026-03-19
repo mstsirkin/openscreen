@@ -450,6 +450,22 @@ class Connection(private val backend: NativeBackedBackend) {
         monitorJob?.cancel()
         scope.cancel()
     }
+
+    fun openVideo(
+        context: Context,
+        uri: Uri,
+        mirrorLocally: Boolean,
+        startPositionMs: Long,
+        startPlaying: Boolean,
+    ) {
+        backend.openVideo(
+            context,
+            uri,
+            mirrorLocally,
+            startPositionMs,
+            startPlaying,
+        )
+    }
 }
 
 private fun getAutoReconnectTargets(context: Context): Set<String> {
@@ -564,7 +580,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
 
     fun openSelectedVideoOnCast(uri: Uri, startPlaying: Boolean, startPositionMs: Long = 0L) {
         if (connectedDevice == null || connectionState != Connection.State.CONNECTED) return
-        backend.openVideo(
+        connection.openVideo(
             context,
             uri,
             localMirrorEnabled,
