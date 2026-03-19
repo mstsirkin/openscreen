@@ -62,7 +62,10 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
   void UpdateEncoderBitrates();
   void ControlForNetworkCongestion();
   void StartPlaybackAt(Clock::duration position);
+  void StartPausedKeepaliveAt(Clock::duration position);
   void StopCapturers();
+  void SchedulePausedKeepalive();
+  void SendPausedKeepaliveFrame();
   void UpdateStatusOnConsole();
   Clock::duration ClampPosition(Clock::duration position) const;
   VideoViewport ClampViewport(const VideoViewport& viewport) const;
@@ -111,6 +114,7 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
 
   Alarm next_task_;
   Alarm console_update_task_;
+  Alarm paused_keepalive_task_;
 
   Clock::duration media_duration_{};
   Clock::duration start_position_{};

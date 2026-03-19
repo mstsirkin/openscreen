@@ -29,6 +29,8 @@ int RoundToEven(int value) {
   return value & ~1;
 }
 
+constexpr auto kPausedKeepaliveInterval = std::chrono::seconds(4);
+
 }  // namespace
 
 ControllableFileSender::ControllableFileSender(
@@ -51,6 +53,7 @@ ControllableFileSender::ControllableFileSender(
           std::move(senders.video_sender))),
       next_task_(env_.now_function(), env_.task_runner()),
       console_update_task_(env_.now_function(), env_.task_runner()),
+      paused_keepalive_task_(env_.now_function(), env_.task_runner()),
       media_duration_(GetMediaDuration(settings_.path_to_file.c_str())) {
   OSP_CHECK(senders.audio_config.codec == AudioCodec::kOpus);
   OSP_CHECK(senders.video_config.codec == VideoCodec::kVp8 ||
@@ -83,6 +86,7 @@ void ControllableFileSender::Play() {
 
 void ControllableFileSender::Pause() {
   if (!is_playing_) {
+    SchedulePausedKeepalive();
     return;
   }
   last_known_position_ = GetCurrentPosition();
@@ -93,6 +97,7 @@ void ControllableFileSender::Pause() {
   if (video_capturer_.has_value()) video_capturer_->SetPlaybackRate(0);
   if (audio_capturer_.has_value()) audio_capturer_->SetPlaybackRate(0);
   is_playing_ = false;
+  SchedulePausedKeepalive();
 }
 
 void ControllableFileSender::Stop() {
@@ -108,6 +113,9 @@ void ControllableFileSender::SeekTo(Clock::duration position) {
     // Decode and send exactly one video frame at the new position.
     auto ref = env_.now() + settings_.playout_delay;
     video_capturer_->SeekAndDeliverOneFrame(last_known_position_, ref);
+    SchedulePausedKeepalive();
+  } else {
+    StartPausedKeepaliveAt(last_known_position_);
   }
 }
 
@@ -204,13 +212,49 @@ void ControllableFileSender::StartPlaybackAt(Clock::duration position) {
                                        kConsoleUpdateInterval);
 }
 
+void ControllableFileSender::StartPausedKeepaliveAt(Clock::duration position) {
+  StopCapturers();
+  start_position_ = ClampPosition(position);
+  last_known_position_ = start_position_;
+  playback_start_time_ = env_.now() + settings_.playout_delay;
+  video_capturer_.emplace(env_, settings_.path_to_file.c_str(),
+                          playback_start_time_, start_position_, *this);
+  video_capturer_->SetPlaybackRate(0);
+  num_capturers_running_ = 1;
+  is_playing_ = false;
+  SendPausedKeepaliveFrame();
+}
+
 void ControllableFileSender::StopCapturers() {
   next_task_.Cancel();
   console_update_task_.Cancel();
+  paused_keepalive_task_.Cancel();
   audio_capturer_.reset();
   video_capturer_.reset();
   num_capturers_running_ = 0;
   is_playing_ = false;
+}
+
+void ControllableFileSender::SchedulePausedKeepalive() {
+  paused_keepalive_task_.Cancel();
+  if (is_playing_) {
+    return;
+  }
+  paused_keepalive_task_.ScheduleFromNow(
+      [this] { SendPausedKeepaliveFrame(); }, kPausedKeepaliveInterval);
+}
+
+void ControllableFileSender::SendPausedKeepaliveFrame() {
+  if (is_playing_) {
+    return;
+  }
+  if (!video_capturer_.has_value()) {
+    StartPausedKeepaliveAt(last_known_position_);
+    return;
+  }
+  const auto ref = env_.now() + settings_.playout_delay;
+  video_capturer_->SeekAndDeliverOneFrame(last_known_position_, ref);
+  SchedulePausedKeepalive();
 }
 
 void ControllableFileSender::UpdateStatusOnConsole() {
@@ -304,6 +348,7 @@ void ControllableFileSender::OnEndOfFile(SimulatedCapturer* capturer) {
   if (num_capturers_running_ == 0) {
     StopCapturers();
     last_known_position_ = media_duration_;
+    StartPausedKeepaliveAt(last_known_position_);
   }
 }
 
