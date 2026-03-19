@@ -427,6 +427,11 @@ class Connection(private val backend: NativeBackedBackend) {
         dispatchStateChanged()
         val result = backend.connect(device.target)
         if (result.isSuccess) {
+            backend.syncStatus()
+            if (backend.status.value.startsWith("Connected to ")) {
+                state = State.CONNECTED
+                lastError = 0
+            }
             startMonitoring()
         } else {
             state = State.DISCONNECTED
