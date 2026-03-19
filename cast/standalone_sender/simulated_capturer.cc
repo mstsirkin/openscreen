@@ -23,6 +23,26 @@ using clock_operators::operator<<;
 namespace {
 // Threshold at which a warning about media pausing should be logged.
 constexpr std::chrono::seconds kPauseWarningThreshold(3);
+
+int NormalizeDisplayRotation(double degrees) {
+  if (std::isnan(degrees)) {
+    return 0;
+  }
+  int normalized = static_cast<int>(std::lround(degrees)) % 360;
+  if (normalized < 0) {
+    normalized += 360;
+  }
+  if (normalized >= 315 || normalized < 45) {
+    return 0;
+  }
+  if (normalized < 135) {
+    return 90;
+  }
+  if (normalized < 225) {
+    return 180;
+  }
+  return 270;
+}
 }  // namespace
 
 SimulatedCapturer::Observer::~Observer() = default;
@@ -61,6 +81,18 @@ SimulatedCapturer::SimulatedCapturer(Environment& environment,
   }
 
   stream_index_ = stream_result;
+  if (media_type_ == AVMEDIA_TYPE_VIDEO) {
+    const AVPacketSideData* display_matrix = av_packet_side_data_get(
+        format_context_->streams[stream_index_]->codecpar->coded_side_data,
+        format_context_->streams[stream_index_]->codecpar->nb_coded_side_data,
+        AV_PKT_DATA_DISPLAYMATRIX);
+    if (display_matrix &&
+        display_matrix->size >= static_cast<int>(sizeof(int32_t) * 9)) {
+      display_rotation_degrees_ = NormalizeDisplayRotation(
+          -av_display_rotation_get(
+              reinterpret_cast<const int32_t*>(display_matrix->data)));
+    }
+  }
   decoder_context_ = MakeUniqueAVCodecContext(codec);
   if (!decoder_context_) {
     OnError("MakeUniqueAVCodecContext", AVERROR_BUG);

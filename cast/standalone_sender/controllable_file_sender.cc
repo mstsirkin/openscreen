@@ -348,14 +348,27 @@ std::unique_ptr<StreamingVideoEncoder> ControllableFileSender::CreateVideoEncode
 void ControllableFileSender::PrepareBaseVideoFrame(
     const AVFrame& av_frame,
     StreamingVideoEncoder::VideoFrame* frame) {
-  const int src_w = av_frame.width - av_frame.crop_left - av_frame.crop_right;
-  const int src_h = av_frame.height - av_frame.crop_top - av_frame.crop_bottom;
-  const uint8_t* src_y = av_frame.data[0] + av_frame.crop_left +
-                         av_frame.linesize[0] * av_frame.crop_top;
-  const uint8_t* src_u = av_frame.data[1] + av_frame.crop_left / 2 +
-                         av_frame.linesize[1] * av_frame.crop_top / 2;
-  const uint8_t* src_v = av_frame.data[2] + av_frame.crop_left / 2 +
-                         av_frame.linesize[2] * av_frame.crop_top / 2;
+  const int unrotated_w =
+      av_frame.width - av_frame.crop_left - av_frame.crop_right;
+  const int unrotated_h =
+      av_frame.height - av_frame.crop_top - av_frame.crop_bottom;
+  const uint8_t* source_y = av_frame.data[0] + av_frame.crop_left +
+                            av_frame.linesize[0] * av_frame.crop_top;
+  const uint8_t* source_u = av_frame.data[1] + av_frame.crop_left / 2 +
+                            av_frame.linesize[1] * av_frame.crop_top / 2;
+  const uint8_t* source_v = av_frame.data[2] + av_frame.crop_left / 2 +
+                            av_frame.linesize[2] * av_frame.crop_top / 2;
+  int src_w = unrotated_w;
+  int src_h = unrotated_h;
+  int src_y_stride = av_frame.linesize[0];
+  int src_u_stride = av_frame.linesize[1];
+  int src_v_stride = av_frame.linesize[2];
+  const uint8_t* src_y = source_y;
+  const uint8_t* src_u = source_u;
+  const uint8_t* src_v = source_v;
+
+  const int rotation =
+      video_capturer_ ? video_capturer_->display_rotation_degrees() : 0;
 
   std::memset(padded_y_.data(), 16, padded_y_.size());
   std::memset(padded_u_.data(), 128, padded_u_.size());
@@ -380,8 +393,7 @@ void ControllableFileSender::PrepareBaseVideoFrame(
   OSP_CHECK(viewport_scaler_);
 
   const uint8_t* src_planes[] = {src_y, src_u, src_v};
-  const int src_strides[] = {
-      av_frame.linesize[0], av_frame.linesize[1], av_frame.linesize[2]};
+  const int src_strides[] = {src_y_stride, src_u_stride, src_v_stride};
   uint8_t* dst_planes[] = {
       padded_y_.data() + y_off * kDisplayWidth + x_off,
       padded_u_.data() + (y_off / 2) * (kDisplayWidth / 2) + x_off / 2,
@@ -396,6 +408,7 @@ void ControllableFileSender::PrepareBaseVideoFrame(
   frame->width = kDisplayWidth;
   frame->height = kDisplayHeight;
   frame->duration = milliseconds(33);
+  frame->rotation_degrees = rotation;
   frame->yuv_planes[0] = padded_y_.data();
   frame->yuv_planes[1] = padded_u_.data();
   frame->yuv_planes[2] = padded_v_.data();

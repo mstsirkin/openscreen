@@ -85,7 +85,12 @@ if (!build_with_chromium) {
           "streaming_mediacodec_encoder.cc",
           "streaming_mediacodec_encoder.h",
         ]
-        libs += [ "mediandk" ]
+        libs += [
+          "EGL",
+          "GLESv2",
+          "android",
+          "mediandk",
+        ]
       }
 
       configs = [ "../common:certificate_config" ]

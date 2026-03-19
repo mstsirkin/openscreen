@@ -70,6 +70,20 @@ Expected:
 - `Connection.state` leaves `CONNECTED`.
 - UI no longer claims an active connected session once Cast is gone.
 
+### T6. Rotated portrait video on hardware encode
+
+Steps:
+1. Launch the app on the Samsung device.
+2. Open `20260318_234847.mp4`.
+3. Leave `HW enc` enabled.
+4. Tap the TV device row.
+5. Verify the TV through the phone camera while playback continues.
+
+Expected:
+- TV shows the video upright, not sideways or upside down.
+- TV playback continues instead of stalling after startup.
+- Non-rotated videos continue to use the existing byte-buffer hardware path.
+
 ## Latest Execution Notes
 
 ### 2026-03-18 Samsung run
@@ -84,3 +98,10 @@ Expected:
   - EOF native fix is implemented locally, but the current UI automation path still needs a reliable way to drive seek-back after EOF.
 - T5: NOT YET VERIFIED
   - Not exercised in this run.
+
+### 2026-03-19 Samsung run
+
+- T6: PASS
+  - Verified on `SM-N985F` with `HW enc` enabled using the normal in-app flow: `Open Video` -> select `20260318_234847.mp4` -> tap `GoogleTV4740`.
+  - App status reached `Connected ... | Playing`.
+  - Phone camera screenshots showed the TV rendering the portrait clip upright with continuous playback instead of the earlier sideways/upside-down startup.

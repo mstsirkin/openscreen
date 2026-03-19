@@ -45,6 +45,7 @@ class SimulatedCapturer {
   // Seek and decode one frame immediately, even when paused.
   void SeekAndDeliverOneFrame(Clock::duration media_time,
                               Clock::time_point reference_time);
+  int display_rotation_degrees() const { return display_rotation_degrees_; }
 
  protected:
   SimulatedCapturer(Environment& environment,
@@ -121,6 +122,7 @@ class SimulatedCapturer {
   // Used to determine playback rate. Currently, we only support "playing"
   // at 1x speed, or "pausing" at 0x speed.
   bool playback_rate_is_non_zero_ = true;
+  int display_rotation_degrees_ = 0;
 };
 
 // Emits the primary audio stream from a file.

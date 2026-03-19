@@ -73,6 +73,9 @@ class StreamingVideoEncoder {
     const uint8_t* yuv_planes[3] = {};
     int yuv_strides[3] = {};
 
+    // Optional clockwise rotation to apply before display/encode.
+    int rotation_degrees = 0;
+
     // How long this frame will be held before the next frame will be displayed,
     // or zero if unknown. The frame duration is passed to the video codec,
     // affecting a number of important behaviors, including: per-frame
