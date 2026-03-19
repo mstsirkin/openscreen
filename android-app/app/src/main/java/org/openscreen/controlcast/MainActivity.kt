@@ -405,21 +405,21 @@ class Connection(private val backend: NativeBackedBackend) {
     }
 
     suspend fun connect(device: CastDevice): Result<Unit> {
+        if (device.target.isBlank()) {
+            state = State.DISCONNECTED
+            lastError = OsConstants.EINVAL
+            return Result.failure(IllegalArgumentException("Blank cast target"))
+        }
         target = device
         state = State.CONNECTING
         lastError = 0
         val result = backend.connect(device.target)
-        if (result.isSuccess) {
-            backend.syncStatus()
-            if (backend.status.value.startsWith("Connected to ")) {
-                state = State.CONNECTED
-                lastError = 0
-            }
-            startMonitoring()
-        } else {
-            state = State.DISCONNECTED
-            lastError = OsConstants.EIO
+        backend.syncStatus()
+        if (backend.status.value.startsWith("Connected to ")) {
+            state = State.CONNECTED
+            lastError = 0
         }
+        startMonitoring()
         return result
     }
 
