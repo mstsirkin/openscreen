@@ -617,6 +617,10 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
 
     // Connect to a device and optionally send the current video.
     fun connectToDevice(device: CastDevice) {
+        if (connectedDevice?.target == device.target &&
+            connectionState != Connection.State.DISCONNECTED) {
+            return
+        }
         coroutineScope.launch {
             connection.connect(device)
         }
@@ -709,7 +713,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         val targets = getAutoReconnectTargets(context)
         val match = discoveredDevices.firstOrNull { it.target in targets }
         if (match != null) {
-            connection.connect(match)
+            connectToDevice(match)
         }
     }
 
