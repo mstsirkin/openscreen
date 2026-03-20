@@ -328,8 +328,9 @@ class NativeBackedBackend : CastControlBackend {
         openPfd1 = null
         openPfd2 = null
 
-        // Try to resolve the content URI to a real file path that
-        // ffmpeg can open directly.  This works for /sdcard files.
+        // Prefer fd-backed access for shared/external media. Some Android
+        // devices expose a readable path to Java but native ffmpeg still gets
+        // EACCES on direct open under scoped storage.
         val filePath = resolveFilePath(context, uri)
         if (filePath != null) {
             nativeOpenVideoPath(
@@ -358,7 +359,10 @@ class NativeBackedBackend : CastControlBackend {
     }
 
     private fun resolveFilePath(context: Context, uri: Uri): String? {
-        if (uri.scheme == "file") return uri.path
+        if (uri.scheme == "file") {
+            val path = uri.path ?: return null
+            return path.takeIf { isNativeDirectPathSafe(context, it) }
+        }
         if (uri.scheme != "content") return null
         val cursor = context.contentResolver.query(
             uri, arrayOf(android.provider.MediaStore.MediaColumns.DATA),
@@ -366,12 +370,37 @@ class NativeBackedBackend : CastControlBackend {
         cursor?.use {
             if (it.moveToFirst()) {
                 val path = it.getString(0)
-                if (!path.isNullOrEmpty() && java.io.File(path).canRead()) {
+                if (!path.isNullOrEmpty() &&
+                    java.io.File(path).canRead() &&
+                    isNativeDirectPathSafe(context, path)
+                ) {
                     return path
                 }
             }
         }
         return null
+    }
+
+    private fun isNativeDirectPathSafe(context: Context, path: String): Boolean {
+        val normalized = path.trim()
+        if (normalized.isEmpty()) return false
+        val appSafePrefixes = listOf(
+            context.filesDir?.absolutePath,
+            context.cacheDir?.absolutePath,
+            context.externalCacheDir?.absolutePath,
+            context.getExternalFilesDir(null)?.absolutePath,
+        ).filterNotNull()
+        if (appSafePrefixes.any { normalized.startsWith(it) }) {
+            return true
+        }
+        // Shared storage paths should go through ParcelFileDescriptor.
+        if (normalized.startsWith("/storage/") ||
+            normalized.startsWith("/sdcard/") ||
+            normalized.startsWith("/mnt/")
+        ) {
+            return false
+        }
+        return true
     }
 
     override fun play() {
