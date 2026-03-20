@@ -73,7 +73,8 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
   void EnsureVideoEncoderCreated();
   void FallbackToTranscode(const char* reason,
                            Clock::duration position,
-                           bool resume_playback);
+                           bool resume_playback,
+                           bool disable_passthrough = false);
   void SchedulePausedKeepalive();
   void SendPausedKeepaliveFrame();
   void UpdateStatusOnConsole();

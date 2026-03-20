@@ -324,12 +324,15 @@ void ControllableFileSender::EnsureVideoEncoderCreated() {
 
 void ControllableFileSender::FallbackToTranscode(const char* reason,
                                                  Clock::duration position,
-                                                 bool resume_playback) {
+                                                 bool resume_playback,
+                                                 bool disable_passthrough) {
   if (!can_passthrough_video_) {
     return;
   }
   OSP_LOG_INFO << "Passthrough fallback: " << reason;
-  can_passthrough_video_ = false;
+  if (disable_passthrough) {
+    can_passthrough_video_ = false;
+  }
   passthrough_active_ = false;
   active_mode_ = std::string("fallback transcode: ") + reason;
   EnsureVideoEncoderCreated();
@@ -461,7 +464,7 @@ void ControllableFileSender::OnVideoPacket(
     Clock::time_point capture_end_time,
     Clock::time_point reference_time) {
   if (!video_sender_) {
-    FallbackToTranscode("missing direct sender", media_timestamp, true);
+    FallbackToTranscode("missing direct sender", media_timestamp, true, true);
     return;
   }
 
@@ -474,7 +477,7 @@ void ControllableFileSender::OnVideoPacket(
 
   const FrameId frame_id = video_sender_->GetNextFrameId();
   if (frame_id == FrameId::first() && !is_key_frame) {
-    FallbackToTranscode("non-keyframe start", computed_position, true);
+    FallbackToTranscode("non-keyframe start", computed_position, true, true);
     return;
   }
   EncodedFrame frame(
@@ -493,7 +496,8 @@ void ControllableFileSender::OnVideoPacket(
   std::ostringstream reason;
   reason << "passthrough enqueue failed: " << result;
   OSP_LOG_WARN << reason.str();
-  FallbackToTranscode(reason.str().c_str(), computed_position, is_playing_);
+  FallbackToTranscode(reason.str().c_str(), computed_position, is_playing(),
+                      true);
 }
 
 void ControllableFileSender::OnEndOfFile(SimulatedCapturer* capturer) {
@@ -528,7 +532,8 @@ void ControllableFileSender::OnError(
     SimulatedVideoPassthroughCapturer* capturer,
     const std::string& message) {
   OSP_LOG_ERROR << "Passthrough sender failed: " << message;
-  FallbackToTranscode("passthrough error", last_known_position_, is_playing_);
+  FallbackToTranscode("passthrough error", last_known_position_, is_playing_,
+                      true);
 }
 
 std::string ControllableFileSender::GetActiveModeString() const {
