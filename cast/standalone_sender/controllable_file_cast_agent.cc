@@ -122,6 +122,16 @@ bool ControllableFileCastAgent::IsPlaying() const {
   return false;
 }
 
+std::string ControllableFileCastAgent::GetActiveModeString() const {
+  if (sender_) {
+    return sender_->GetActiveModeString();
+  }
+  if (connection_settings_) {
+    return "connecting";
+  }
+  return "idle";
+}
+
 void ControllableFileCastAgent::SetAvSyncOffset(Clock::duration offset) {
   if (sender_) {
     sender_->SetAvSyncOffset(offset);

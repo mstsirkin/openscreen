@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "cast/standalone_sender/connection_settings.h"
@@ -30,7 +31,8 @@ struct VideoViewport {
 // Streams a local file via Cast mirroring and exposes controls required by a
 // mobile UI: play/pause, seek, and viewport changes.
 class ControllableFileSender final : public SimulatedAudioCapturer::Client,
-                                     public SimulatedVideoCapturer::Client {
+                                     public SimulatedVideoCapturer::Client,
+                                     public SimulatedVideoPassthroughCapturer::Client {
  public:
   using ShutdownCallback = std::function<void()>;
 
@@ -54,6 +56,7 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
   Clock::duration GetCurrentPosition() const;
   Clock::duration GetDuration() const;
   bool is_playing() const { return is_playing_; }
+  std::string GetActiveModeString() const;
 
  private:
   static constexpr int kDisplayWidth = 1920;
@@ -64,6 +67,13 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
   void StartPlaybackAt(Clock::duration position);
   void StartPausedKeepaliveAt(Clock::duration position);
   void StopCapturers();
+  bool CanUseVideoPassthrough();
+  bool CanStartVideoPassthroughAt(Clock::duration position) const;
+  bool IsViewportIdentity() const;
+  void EnsureVideoEncoderCreated();
+  void FallbackToTranscode(const char* reason,
+                           Clock::duration position,
+                           bool resume_playback);
   void SchedulePausedKeepalive();
   void SendPausedKeepaliveFrame();
   void UpdateStatusOnConsole();
@@ -79,9 +89,19 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
                     Clock::time_point capture_begin_time,
                     Clock::time_point capture_end_time,
                     Clock::time_point reference_time) final;
+  void OnVideoPacket(ByteView data,
+                     bool is_key_frame,
+                     Clock::duration media_timestamp,
+                     Clock::duration media_duration,
+                     Clock::time_point capture_begin_time,
+                     Clock::time_point capture_end_time,
+                     Clock::time_point reference_time) final;
 
   void OnEndOfFile(SimulatedCapturer* capturer) final;
+  void OnEndOfFile(SimulatedVideoPassthroughCapturer* capturer) final;
   void OnError(SimulatedCapturer* capturer,
+               const std::string& message) final;
+  void OnError(SimulatedVideoPassthroughCapturer* capturer,
                const std::string& message) final;
 
   std::unique_ptr<StreamingVideoEncoder> CreateVideoEncoder(
@@ -107,9 +127,11 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
 
   StreamingOpusEncoder audio_encoder_;
   std::unique_ptr<StreamingVideoEncoder> video_encoder_;
+  std::unique_ptr<Sender> video_sender_;
 
   std::optional<SimulatedAudioCapturer> audio_capturer_;
   std::optional<SimulatedVideoCapturer> video_capturer_;
+  std::optional<SimulatedVideoPassthroughCapturer> video_passthrough_capturer_;
   int num_capturers_running_ = 0;
 
   Alarm next_task_;
@@ -121,6 +143,9 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
   Clock::duration last_known_position_{};
   Clock::time_point playback_start_time_{};
   bool is_playing_ = false;
+  bool can_passthrough_video_ = false;
+  bool passthrough_active_ = false;
+  std::string active_mode_;
 
   VideoViewport viewport_;
 #if defined(__ANDROID__) && !defined(CAST_STANDALONE_SENDER_HAVE_MEDIACODEC)

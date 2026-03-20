@@ -69,6 +69,7 @@ struct ControllerState {
   bool use_hw_encode = true;
   long long av_sync_offset_ms = 0;
   int playout_delay_ms = 400;
+  std::string active_mode = "idle";
   std::string status = "Native backend ready.";
 
 #ifdef HAVE_OPENSCREEN
@@ -106,6 +107,9 @@ void UpdateStatusLocked(ControllerState& state) {
     if (!state.connection.target.empty()) {
       stream << " Target: " << state.connection.target;
     }
+    if (!state.active_mode.empty()) {
+      stream << " | mode " << state.active_mode;
+    }
     state.status = stream.str();
     return;
   }
@@ -116,6 +120,9 @@ void UpdateStatusLocked(ControllerState& state) {
     stream << " @ " << state.position_ms / 1000.0 << "s";
     stream << " | zoom " << state.zoom;
     stream << " | local mirror " << (state.mirror_locally ? "on" : "off");
+    if (!state.active_mode.empty()) {
+      stream << " | mode " << state.active_mode;
+    }
   } else {
     stream << " | no video selected";
   }
@@ -497,8 +504,9 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeDisconnect(
   }
 #endif
   std::lock_guard<std::mutex> lock(state.mutex);
-  state.connection.connected = false;
-  state.playing = false;
+      state.connection.connected = false;
+      state.active_mode = "idle";
+      state.playing = false;
   state.connection.reconnect_enabled = false;
   state.connection.reconnect_delay = kInitialReconnectDelay;
   UpdateStatusLocked(state);
@@ -862,6 +870,7 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeGetStatus(
     state.position_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                             state.connection.cast->GetCurrentPosition())
                             .count();
+    state.active_mode = state.connection.cast->GetActiveModeString();
     UpdateStatusLocked(state);
   }
 #endif

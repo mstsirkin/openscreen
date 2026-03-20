@@ -57,6 +57,7 @@ class ControllableFileCastAgent final
   Clock::duration GetDuration() const;
   bool IsConnected() const;
   bool IsPlaying() const;
+  std::string GetActiveModeString() const;
 
  private:
   void OnConnected(SenderSocketFactory* factory,

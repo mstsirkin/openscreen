@@ -4,10 +4,12 @@
 
 #include "cast/standalone_sender/simulated_capturer.h"
 
+#include <libavcodec/bsf.h>
 #include <libavformat/version.h>
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <ratio>
 #include <sstream>
 #include <thread>
@@ -565,6 +567,278 @@ void SimulatedVideoCapturer::DeliverDataToClient(
     Clock::time_point reference_time) {
   client_.OnVideoFrame(frame, capture_begin_time, capture_end_time,
                        reference_time);
+}
+
+SimulatedVideoPassthroughCapturer::Client::~Client() = default;
+
+VideoPassthroughInfo SimulatedVideoPassthroughCapturer::Probe(
+    const char* path) {
+  VideoPassthroughInfo info;
+  const AVFormatContextUniquePtr format_context = MakeUniqueAVFormatContext(path);
+  if (!format_context) {
+    info.reason = "open failed";
+    return info;
+  }
+
+#if LIBAVFORMAT_VERSION_MAJOR < 59
+  AVCodec* codec = nullptr;
+#else
+  const AVCodec* codec = nullptr;
+#endif
+  const int stream_index = av_find_best_stream(
+      format_context.get(), AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
+  if (stream_index < 0) {
+    info.reason = "no video stream";
+    return info;
+  }
+
+  const AVStream* stream = format_context->streams[stream_index];
+  info.width = stream->codecpar->width;
+  info.height = stream->codecpar->height;
+  if (stream->codecpar->codec_id != AV_CODEC_ID_H264) {
+    info.reason = "video codec is not H.264";
+    return info;
+  }
+
+  const std::string format_name =
+      format_context->iformat && format_context->iformat->name
+          ? format_context->iformat->name
+          : "";
+  if (format_name.find("mp4") == std::string::npos &&
+      format_name.find("mov") == std::string::npos) {
+    info.reason = "container is not MP4/MOV";
+    return info;
+  }
+
+  const AVPacketSideData* display_matrix = av_packet_side_data_get(
+      stream->codecpar->coded_side_data, stream->codecpar->nb_coded_side_data,
+      AV_PKT_DATA_DISPLAYMATRIX);
+  if (display_matrix &&
+      display_matrix->size >= static_cast<int>(sizeof(int32_t) * 9)) {
+    info.display_rotation_degrees = NormalizeDisplayRotation(
+        -av_display_rotation_get(
+            reinterpret_cast<const int32_t*>(display_matrix->data)));
+  }
+  if (info.display_rotation_degrees != 0) {
+    info.reason = "rotation transform required";
+    return info;
+  }
+
+  info.eligible = true;
+  info.reason = "eligible";
+  return info;
+}
+
+SimulatedVideoPassthroughCapturer::SimulatedVideoPassthroughCapturer(
+    Environment& environment,
+    const char* path,
+    Clock::time_point start_time,
+    Clock::duration start_media_time,
+    Client& client)
+    : format_context_(MakeUniqueAVFormatContext(path)),
+      now_(environment.now_function()),
+      start_time_(start_time),
+      start_media_time_(std::max(start_media_time, Clock::duration::zero())),
+      client_(client),
+      packet_(MakeUniqueAVPacket()),
+      next_task_(environment.now_function(), environment.task_runner()) {
+  if (!format_context_) {
+    OnError("MakeUniqueAVFormatContext", AVERROR_UNKNOWN);
+    return;
+  }
+
+#if LIBAVFORMAT_VERSION_MAJOR < 59
+  AVCodec* codec = nullptr;
+#else
+  const AVCodec* codec = nullptr;
+#endif
+  const int stream_result = av_find_best_stream(
+      format_context_.get(), AVMEDIA_TYPE_VIDEO, -1, -1, &codec, 0);
+  if (stream_result < 0) {
+    OnError("av_find_best_stream", stream_result);
+    return;
+  }
+  stream_index_ = stream_result;
+  if (format_context_->streams[stream_index_]->codecpar->codec_id !=
+      AV_CODEC_ID_H264) {
+    OnError("unsupported_video_codec", AVERROR_PATCHWELCOME);
+    return;
+  }
+
+  const AVBitStreamFilter* bsf = av_bsf_get_by_name("h264_mp4toannexb");
+  if (!bsf) {
+    OnError("av_bsf_get_by_name", AVERROR_BSF_NOT_FOUND);
+    return;
+  }
+  const int alloc_result = av_bsf_alloc(bsf, &bitstream_filter_);
+  if (alloc_result < 0) {
+    OnError("av_bsf_alloc", alloc_result);
+    return;
+  }
+  const int params_result = avcodec_parameters_copy(
+      bitstream_filter_->par_in,
+      format_context_->streams[stream_index_]->codecpar);
+  if (params_result < 0) {
+    OnError("avcodec_parameters_copy", params_result);
+    return;
+  }
+  bitstream_filter_->time_base_in =
+      format_context_->streams[stream_index_]->time_base;
+  const int init_result = av_bsf_init(bitstream_filter_);
+  if (init_result < 0) {
+    OnError("av_bsf_init", init_result);
+    return;
+  }
+
+  if (start_media_time_ > Clock::duration::zero()) {
+    SeekTo(start_media_time_, start_time_);
+  } else {
+    next_task_.Schedule([this] { StartReadingNextPacket(); },
+                        Alarm::kImmediately);
+  }
+}
+
+SimulatedVideoPassthroughCapturer::~SimulatedVideoPassthroughCapturer() {
+  if (bitstream_filter_) {
+    av_bsf_free(&bitstream_filter_);
+  }
+}
+
+void SimulatedVideoPassthroughCapturer::SetPlaybackRate(double rate) {
+  playback_rate_is_non_zero_ = rate > 0;
+  if (playback_rate_is_non_zero_) {
+    StartReadingNextPacket();
+  }
+}
+
+void SimulatedVideoPassthroughCapturer::SeekTo(
+    Clock::duration media_time,
+    Clock::time_point new_start_time) {
+  if (!format_context_ || stream_index_ < 0) {
+    return;
+  }
+  next_task_.Cancel();
+  const AVRational time_base = format_context_->streams[stream_index_]->time_base;
+  const int64_t seek_target = av_rescale_q(
+      media_time.count(),
+      AVRational{Clock::duration::period::num, Clock::duration::period::den},
+      time_base);
+  av_seek_frame(format_context_.get(), stream_index_, seek_target,
+                AVSEEK_FLAG_BACKWARD);
+  if (bitstream_filter_) {
+    av_bsf_flush(bitstream_filter_);
+  }
+  start_time_ = new_start_time;
+  start_media_time_ = media_time;
+  last_packet_timestamp_.reset();
+  filtered_packet_storage_.clear();
+  next_task_.Schedule([this] { StartReadingNextPacket(); }, Alarm::kImmediately);
+}
+
+void SimulatedVideoPassthroughCapturer::StartReadingNextPacket() {
+  if (!playback_rate_is_non_zero_) {
+    return;
+  }
+  capture_begin_time_ = now_();
+  while (true) {
+    const int read_result = av_read_frame(format_context_.get(), packet_.get());
+    if (read_result < 0) {
+      if (read_result == AVERROR_EOF) {
+        client_.OnEndOfFile(this);
+      } else {
+        OnError("av_read_frame", read_result);
+      }
+      return;
+    }
+    if (packet_->stream_index != stream_index_) {
+      av_packet_unref(packet_.get());
+      continue;
+    }
+    const int send_result = av_bsf_send_packet(bitstream_filter_, packet_.get());
+    av_packet_unref(packet_.get());
+    if (send_result < 0) {
+      OnError("av_bsf_send_packet", send_result);
+      return;
+    }
+    next_task_.Schedule([this] { DeliverCurrentPacket(); }, Alarm::kImmediately);
+    return;
+  }
+}
+
+void SimulatedVideoPassthroughCapturer::DeliverCurrentPacket() {
+  AVPacket filtered_packet = {};
+  const int receive_result =
+      av_bsf_receive_packet(bitstream_filter_, &filtered_packet);
+  if (receive_result < 0) {
+    if (receive_result == AVERROR(EAGAIN)) {
+      next_task_.Schedule([this] { StartReadingNextPacket(); }, Alarm::kImmediately);
+      return;
+    }
+    if (receive_result == AVERROR_EOF) {
+      client_.OnEndOfFile(this);
+      return;
+    }
+    OnError("av_bsf_receive_packet", receive_result);
+    return;
+  }
+
+  const AVRational time_base = format_context_->streams[stream_index_]->time_base;
+  const int64_t best_timestamp =
+      filtered_packet.pts != AV_NOPTS_VALUE ? filtered_packet.pts
+                                            : filtered_packet.dts;
+  const Clock::duration packet_timestamp =
+      ToApproximateClockDuration(best_timestamp, time_base);
+  if (packet_timestamp < start_media_time_) {
+    av_packet_unref(&filtered_packet);
+    next_task_.Schedule([this] { StartReadingNextPacket(); }, Alarm::kImmediately);
+    return;
+  }
+
+  Clock::duration packet_duration = Clock::duration::zero();
+  if (filtered_packet.duration > 0) {
+    packet_duration = ToApproximateClockDuration(filtered_packet.duration, time_base);
+  } else if (last_packet_timestamp_) {
+    packet_duration = packet_timestamp - *last_packet_timestamp_;
+  }
+  if (packet_duration <= Clock::duration::zero()) {
+    packet_duration = std::chrono::milliseconds(33);
+  }
+  last_packet_timestamp_ = packet_timestamp;
+
+  filtered_packet_storage_.assign(filtered_packet.data,
+                                  filtered_packet.data + filtered_packet.size);
+  const bool is_key_frame = (filtered_packet.flags & AV_PKT_FLAG_KEY) != 0;
+  av_packet_unref(&filtered_packet);
+
+  const auto reference_time = start_time_ + (packet_timestamp - start_media_time_);
+  next_task_.Schedule(
+      [this, reference_time, packet_timestamp, packet_duration, is_key_frame] {
+        client_.OnVideoPacket(
+            ByteView(filtered_packet_storage_.data(),
+                     filtered_packet_storage_.size()),
+            is_key_frame,
+            packet_timestamp, packet_duration, capture_begin_time_,
+            capture_begin_time_ + std::chrono::milliseconds(1), reference_time);
+        StartReadingNextPacket();
+      },
+      reference_time);
+}
+
+void SimulatedVideoPassthroughCapturer::OnError(const char* what, int av_errnum) {
+  std::ostringstream error;
+  error << "For video passthrough, " << what
+        << " returned error: " << AvErrorToString(av_errnum);
+  next_task_.Schedule(
+      [this, error_string = error.str()] { client_.OnError(this, error_string); },
+      Alarm::kImmediately);
+}
+
+Clock::duration SimulatedVideoPassthroughCapturer::ToApproximateClockDuration(
+    int64_t ticks,
+    const AVRational& time_base) {
+  return Clock::duration(av_rescale_q(
+      ticks, time_base,
+      AVRational{Clock::duration::period::num, Clock::duration::period::den}));
 }
 
 }  // namespace openscreen::cast

@@ -13,6 +13,7 @@
 
 #include "cast/standalone_sender/ffmpeg_glue.h"
 #include "platform/api/time.h"
+#include "platform/base/span.h"
 #include "util/alarm.h"
 
 namespace openscreen::cast {
@@ -232,6 +233,69 @@ class SimulatedVideoCapturer final : public SimulatedCapturer {
                            Clock::time_point capture_begin_time,
                            Clock::time_point capture_end_time,
                            Clock::time_point reference_time) final;
+};
+
+struct VideoPassthroughInfo {
+  bool eligible = false;
+  std::string reason;
+  int width = 0;
+  int height = 0;
+  int display_rotation_degrees = 0;
+};
+
+// Emits compressed H.264 video packets from an MP4-like container for direct
+// streaming, without decode/re-encode.
+class SimulatedVideoPassthroughCapturer final {
+ public:
+  class Client {
+   public:
+    virtual void OnEndOfFile(SimulatedVideoPassthroughCapturer* capturer) = 0;
+    virtual void OnError(SimulatedVideoPassthroughCapturer* capturer,
+                         const std::string& message) = 0;
+    virtual void OnVideoPacket(ByteView data,
+                               bool is_key_frame,
+                               Clock::duration media_timestamp,
+                               Clock::duration media_duration,
+                               Clock::time_point capture_begin_time,
+                               Clock::time_point capture_end_time,
+                               Clock::time_point reference_time) = 0;
+
+   protected:
+    virtual ~Client();
+  };
+
+  static VideoPassthroughInfo Probe(const char* path);
+
+  SimulatedVideoPassthroughCapturer(Environment& environment,
+                                    const char* path,
+                                    Clock::time_point start_time,
+                                    Clock::duration start_media_time,
+                                    Client& client);
+  ~SimulatedVideoPassthroughCapturer();
+
+  void SetPlaybackRate(double rate);
+  void SeekTo(Clock::duration media_time, Clock::time_point new_start_time);
+
+ private:
+  void StartReadingNextPacket();
+  void DeliverCurrentPacket();
+  void OnError(const char* what, int av_errnum);
+  static Clock::duration ToApproximateClockDuration(int64_t ticks,
+                                                    const AVRational& time_base);
+
+  const AVFormatContextUniquePtr format_context_;
+  ClockNowFunctionPtr now_;
+  Clock::time_point start_time_;
+  Clock::duration start_media_time_;
+  Client& client_;
+  const AVPacketUniquePtr packet_;
+  int stream_index_ = -1;
+  Alarm next_task_;
+  bool playback_rate_is_non_zero_ = true;
+  std::optional<Clock::duration> last_packet_timestamp_;
+  Clock::time_point capture_begin_time_;
+  AVBSFContext* bitstream_filter_ = nullptr;
+  std::vector<uint8_t> filtered_packet_storage_;
 };
 
 }  // namespace openscreen::cast

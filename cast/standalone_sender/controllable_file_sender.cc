@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <sstream>
 #include <utility>
 
 #if defined(CAST_STANDALONE_SENDER_HAVE_LIBAOM)
@@ -31,6 +32,8 @@ int RoundToEven(int value) {
 
 constexpr auto kPausedKeepaliveInterval = std::chrono::seconds(4);
 
+constexpr char kDirectVideoMode[] = "direct-h264-video passthrough";
+
 }  // namespace
 
 ControllableFileSender::ControllableFileSender(
@@ -47,10 +50,7 @@ ControllableFileSender::ControllableFileSender(
       audio_encoder_(senders.audio_sender->config().channels,
                      StreamingOpusEncoder::kDefaultCastAudioFramesPerSecond,
                      std::move(senders.audio_sender)),
-      video_encoder_(CreateVideoEncoder(
-          StreamingVideoEncoder::Parameters{.codec = settings_.codec},
-          env_.task_runner(),
-          std::move(senders.video_sender))),
+      video_sender_(std::move(senders.video_sender)),
       next_task_(env_.now_function(), env_.task_runner()),
       console_update_task_(env_.now_function(), env_.task_runner()),
       paused_keepalive_task_(env_.now_function(), env_.task_runner()),
@@ -67,6 +67,11 @@ ControllableFileSender::ControllableFileSender(
   transformed_y_.resize(kDisplayWidth * kDisplayHeight);
   transformed_u_.resize(kDisplayWidth / 2 * kDisplayHeight / 2);
   transformed_v_.resize(kDisplayWidth / 2 * kDisplayHeight / 2);
+
+  can_passthrough_video_ = CanUseVideoPassthrough();
+  if (!can_passthrough_video_) {
+    EnsureVideoEncoderCreated();
+  }
 
   UpdateEncoderBitrates();
   Play();
@@ -85,6 +90,11 @@ void ControllableFileSender::Play() {
 }
 
 void ControllableFileSender::Pause() {
+  if (passthrough_active_) {
+    last_known_position_ = GetCurrentPosition();
+    FallbackToTranscode("pause", last_known_position_, false);
+    return;
+  }
   if (!is_playing_) {
     SchedulePausedKeepalive();
     return;
@@ -107,6 +117,14 @@ void ControllableFileSender::Stop() {
 
 void ControllableFileSender::SeekTo(Clock::duration position) {
   last_known_position_ = ClampPosition(position);
+  if (passthrough_active_) {
+    if (CanStartVideoPassthroughAt(last_known_position_)) {
+      StartPlaybackAt(last_known_position_);
+    } else {
+      FallbackToTranscode("seek", last_known_position_, is_playing_);
+    }
+    return;
+  }
   if (is_playing_) {
     StartPlaybackAt(last_known_position_);
   } else if (video_capturer_.has_value()) {
@@ -126,6 +144,9 @@ void ControllableFileSender::SeekBy(Clock::duration delta) {
 
 void ControllableFileSender::SetViewport(const VideoViewport& viewport) {
   viewport_ = ClampViewport(viewport);
+  if (passthrough_active_ && !IsViewportIdentity()) {
+    FallbackToTranscode("viewport", GetCurrentPosition(), is_playing_);
+  }
 }
 
 void ControllableFileSender::ResetViewport() {
@@ -154,8 +175,10 @@ void ControllableFileSender::UpdateEncoderBitrates() {
   } else {
     audio_encoder_.UseStandardQuality();
   }
-  video_encoder_->SetTargetBitrate(bandwidth_being_utilized_ -
-                                   audio_encoder_.GetBitrate());
+  if (video_encoder_) {
+    video_encoder_->SetTargetBitrate(bandwidth_being_utilized_ -
+                                     audio_encoder_.GetBitrate());
+  }
 }
 
 void ControllableFileSender::ControlForNetworkCongestion() {
@@ -197,13 +220,33 @@ void ControllableFileSender::StartPlaybackAt(Clock::duration position) {
   playback_start_time_ = env_.now() + settings_.playout_delay;
 
 
-  num_capturers_running_ = 2;
+  num_capturers_running_ = 1;
   audio_capturer_.emplace(env_, settings_.path_to_file.c_str(),
                           audio_encoder_.num_channels(),
                           audio_encoder_.sample_rate(), playback_start_time_,
                           start_position_, *this);
-  video_capturer_.emplace(env_, settings_.path_to_file.c_str(),
-                          playback_start_time_, start_position_, *this);
+  if (CanStartVideoPassthroughAt(start_position_)) {
+    video_passthrough_capturer_.emplace(env_, settings_.path_to_file.c_str(),
+                                        playback_start_time_, start_position_,
+                                        *this);
+    passthrough_active_ = true;
+    active_mode_ = kDirectVideoMode;
+  } else if (settings_.should_include_video) {
+    EnsureVideoEncoderCreated();
+    video_capturer_.emplace(env_, settings_.path_to_file.c_str(),
+                            playback_start_time_, start_position_, *this);
+    passthrough_active_ = false;
+    if (active_mode_.empty()) {
+      active_mode_ = "fallback transcode";
+    }
+  } else {
+    passthrough_active_ = false;
+    active_mode_ = "audio only";
+  }
+  if (settings_.should_include_video) {
+    ++num_capturers_running_;
+  }
+  OSP_LOG_INFO << "ControllableFileSender active mode: " << active_mode_;
   is_playing_ = true;
 
   next_task_.ScheduleFromNow([this] { ControlForNetworkCongestion(); },
@@ -214,6 +257,7 @@ void ControllableFileSender::StartPlaybackAt(Clock::duration position) {
 
 void ControllableFileSender::StartPausedKeepaliveAt(Clock::duration position) {
   StopCapturers();
+  EnsureVideoEncoderCreated();
   start_position_ = ClampPosition(position);
   last_known_position_ = start_position_;
   playback_start_time_ = env_.now() + settings_.playout_delay;
@@ -222,6 +266,9 @@ void ControllableFileSender::StartPausedKeepaliveAt(Clock::duration position) {
   video_capturer_->SetPlaybackRate(0);
   num_capturers_running_ = 1;
   is_playing_ = false;
+  passthrough_active_ = false;
+  active_mode_ = "fallback transcode";
+  OSP_LOG_INFO << "ControllableFileSender active mode: " << active_mode_;
   SendPausedKeepaliveFrame();
 }
 
@@ -231,8 +278,66 @@ void ControllableFileSender::StopCapturers() {
   paused_keepalive_task_.Cancel();
   audio_capturer_.reset();
   video_capturer_.reset();
+  video_passthrough_capturer_.reset();
   num_capturers_running_ = 0;
   is_playing_ = false;
+  passthrough_active_ = false;
+}
+
+bool ControllableFileSender::CanUseVideoPassthrough() {
+  if (!settings_.should_include_video || settings_.codec != VideoCodec::kH264 ||
+      !video_sender_) {
+    active_mode_ = "fallback transcode: sender codec";
+    return false;
+  }
+
+  const auto info =
+      SimulatedVideoPassthroughCapturer::Probe(settings_.path_to_file.c_str());
+  if (!info.eligible) {
+    active_mode_ = "fallback transcode: " + info.reason;
+    return false;
+  }
+
+  return true;
+}
+
+bool ControllableFileSender::CanStartVideoPassthroughAt(
+    Clock::duration position) const {
+  return settings_.should_include_video && can_passthrough_video_ &&
+         IsViewportIdentity() &&
+         (media_duration_ <= Clock::duration::zero() || position < media_duration_);
+}
+
+bool ControllableFileSender::IsViewportIdentity() const {
+  return viewport_.zoom <= 1.001 && std::abs(viewport_.center_x - 0.5) < 1e-6 &&
+         std::abs(viewport_.center_y - 0.5) < 1e-6;
+}
+
+void ControllableFileSender::EnsureVideoEncoderCreated() {
+  if (video_encoder_ || !video_sender_) {
+    return;
+  }
+  video_encoder_ = CreateVideoEncoder(
+      StreamingVideoEncoder::Parameters{.codec = settings_.codec},
+      env_.task_runner(), std::move(video_sender_));
+}
+
+void ControllableFileSender::FallbackToTranscode(const char* reason,
+                                                 Clock::duration position,
+                                                 bool resume_playback) {
+  if (!can_passthrough_video_) {
+    return;
+  }
+  OSP_LOG_INFO << "Passthrough fallback: " << reason;
+  can_passthrough_video_ = false;
+  passthrough_active_ = false;
+  active_mode_ = std::string("fallback transcode: ") + reason;
+  EnsureVideoEncoderCreated();
+  if (resume_playback) {
+    StartPlaybackAt(position);
+  } else {
+    StartPausedKeepaliveAt(position);
+  }
 }
 
 void ControllableFileSender::SchedulePausedKeepalive() {
@@ -246,6 +351,10 @@ void ControllableFileSender::SchedulePausedKeepalive() {
 
 void ControllableFileSender::SendPausedKeepaliveFrame() {
   if (is_playing_) {
+    return;
+  }
+  if (passthrough_active_) {
+    FallbackToTranscode("paused keepalive", last_known_position_, false);
     return;
   }
   if (!video_capturer_.has_value()) {
@@ -343,7 +452,61 @@ void ControllableFileSender::OnVideoFrame(const AVFrame& av_frame,
   video_encoder_->EncodeAndSend(frame, reference_time, {});
 }
 
+void ControllableFileSender::OnVideoPacket(
+    ByteView data,
+    bool is_key_frame,
+    Clock::duration media_timestamp,
+    Clock::duration media_duration,
+    Clock::time_point capture_begin_time,
+    Clock::time_point capture_end_time,
+    Clock::time_point reference_time) {
+  if (!video_sender_) {
+    FallbackToTranscode("missing direct sender", media_timestamp, true);
+    return;
+  }
+
+  const auto computed_position = ClampPosition(
+      start_position_ +
+      std::max(reference_time - playback_start_time_, Clock::duration::zero()));
+  if (is_playing_) {
+    last_known_position_ = computed_position;
+  }
+
+  const FrameId frame_id = video_sender_->GetNextFrameId();
+  if (frame_id == FrameId::first() && !is_key_frame) {
+    FallbackToTranscode("non-keyframe start", computed_position, true);
+    return;
+  }
+  EncodedFrame frame(
+      is_key_frame ? EncodedFrame::Dependency::kKeyFrame
+                   : EncodedFrame::Dependency::kDependent,
+      frame_id, is_key_frame ? frame_id : frame_id - 1,
+      RtpTimeTicks::FromTimeSinceOrigin(media_timestamp,
+                                        video_sender_->rtp_timebase()),
+      reference_time, std::chrono::milliseconds::zero(), capture_begin_time,
+      capture_end_time, data);
+  const auto result = video_sender_->EnqueueFrame(frame);
+  if (result == Sender::OK) {
+    return;
+  }
+
+  std::ostringstream reason;
+  reason << "passthrough enqueue failed: " << result;
+  OSP_LOG_WARN << reason.str();
+  FallbackToTranscode(reason.str().c_str(), computed_position, is_playing_);
+}
+
 void ControllableFileSender::OnEndOfFile(SimulatedCapturer* capturer) {
+  --num_capturers_running_;
+  if (num_capturers_running_ == 0) {
+    StopCapturers();
+    last_known_position_ = media_duration_;
+    StartPausedKeepaliveAt(last_known_position_);
+  }
+}
+
+void ControllableFileSender::OnEndOfFile(
+    SimulatedVideoPassthroughCapturer* capturer) {
   --num_capturers_running_;
   if (num_capturers_running_ == 0) {
     StopCapturers();
@@ -359,6 +522,17 @@ void ControllableFileSender::OnError(SimulatedCapturer* capturer,
   if (shutdown_callback_) {
     shutdown_callback_();
   }
+}
+
+void ControllableFileSender::OnError(
+    SimulatedVideoPassthroughCapturer* capturer,
+    const std::string& message) {
+  OSP_LOG_ERROR << "Passthrough sender failed: " << message;
+  FallbackToTranscode("passthrough error", last_known_position_, is_playing_);
+}
+
+std::string ControllableFileSender::GetActiveModeString() const {
+  return active_mode_;
 }
 
 std::unique_ptr<StreamingVideoEncoder> ControllableFileSender::CreateVideoEncoder(
