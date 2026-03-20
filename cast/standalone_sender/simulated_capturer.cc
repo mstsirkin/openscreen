@@ -4,7 +4,6 @@
 
 #include "cast/standalone_sender/simulated_capturer.h"
 
-#include <libavcodec/bsf.h>
 #include <libavformat/version.h>
 
 #include <algorithm>
@@ -665,28 +664,7 @@ SimulatedVideoPassthroughCapturer::SimulatedVideoPassthroughCapturer(
     return;
   }
 
-  const AVBitStreamFilter* bsf = av_bsf_get_by_name("h264_mp4toannexb");
-  if (!bsf) {
-    OnError("av_bsf_get_by_name", AVERROR_BSF_NOT_FOUND);
-    return;
-  }
-  const int alloc_result = av_bsf_alloc(bsf, &bitstream_filter_);
-  if (alloc_result < 0) {
-    OnError("av_bsf_alloc", alloc_result);
-    return;
-  }
-  const int params_result = avcodec_parameters_copy(
-      bitstream_filter_->par_in,
-      format_context_->streams[stream_index_]->codecpar);
-  if (params_result < 0) {
-    OnError("avcodec_parameters_copy", params_result);
-    return;
-  }
-  bitstream_filter_->time_base_in =
-      format_context_->streams[stream_index_]->time_base;
-  const int init_result = av_bsf_init(bitstream_filter_);
-  if (init_result < 0) {
-    OnError("av_bsf_init", init_result);
+  if (!InitializeAvcConfiguration()) {
     return;
   }
 
@@ -699,9 +677,6 @@ SimulatedVideoPassthroughCapturer::SimulatedVideoPassthroughCapturer(
 }
 
 SimulatedVideoPassthroughCapturer::~SimulatedVideoPassthroughCapturer() {
-  if (bitstream_filter_) {
-    av_bsf_free(&bitstream_filter_);
-  }
 }
 
 void SimulatedVideoPassthroughCapturer::SetPlaybackRate(double rate) {
@@ -725,13 +700,14 @@ void SimulatedVideoPassthroughCapturer::SeekTo(
       time_base);
   av_seek_frame(format_context_.get(), stream_index_, seek_target,
                 AVSEEK_FLAG_BACKWARD);
-  if (bitstream_filter_) {
-    av_bsf_flush(bitstream_filter_);
-  }
   start_time_ = new_start_time;
   start_media_time_ = media_time;
   last_packet_timestamp_.reset();
   filtered_packet_storage_.clear();
+  next_task_.Schedule([this] { StartReadingNextPacket(); }, Alarm::kImmediately);
+}
+
+void SimulatedVideoPassthroughCapturer::Continue() {
   next_task_.Schedule([this] { StartReadingNextPacket(); }, Alarm::kImmediately);
 }
 
@@ -754,49 +730,26 @@ void SimulatedVideoPassthroughCapturer::StartReadingNextPacket() {
       av_packet_unref(packet_.get());
       continue;
     }
-    const int send_result = av_bsf_send_packet(bitstream_filter_, packet_.get());
-    av_packet_unref(packet_.get());
-    if (send_result < 0) {
-      OnError("av_bsf_send_packet", send_result);
-      return;
-    }
     next_task_.Schedule([this] { DeliverCurrentPacket(); }, Alarm::kImmediately);
     return;
   }
 }
 
 void SimulatedVideoPassthroughCapturer::DeliverCurrentPacket() {
-  AVPacket filtered_packet = {};
-  const int receive_result =
-      av_bsf_receive_packet(bitstream_filter_, &filtered_packet);
-  if (receive_result < 0) {
-    if (receive_result == AVERROR(EAGAIN)) {
-      next_task_.Schedule([this] { StartReadingNextPacket(); }, Alarm::kImmediately);
-      return;
-    }
-    if (receive_result == AVERROR_EOF) {
-      client_.OnEndOfFile(this);
-      return;
-    }
-    OnError("av_bsf_receive_packet", receive_result);
-    return;
-  }
-
   const AVRational time_base = format_context_->streams[stream_index_]->time_base;
   const int64_t best_timestamp =
-      filtered_packet.pts != AV_NOPTS_VALUE ? filtered_packet.pts
-                                            : filtered_packet.dts;
+      packet_->pts != AV_NOPTS_VALUE ? packet_->pts : packet_->dts;
   const Clock::duration packet_timestamp =
       ToApproximateClockDuration(best_timestamp, time_base);
   if (packet_timestamp < start_media_time_) {
-    av_packet_unref(&filtered_packet);
+    av_packet_unref(packet_.get());
     next_task_.Schedule([this] { StartReadingNextPacket(); }, Alarm::kImmediately);
     return;
   }
 
   Clock::duration packet_duration = Clock::duration::zero();
-  if (filtered_packet.duration > 0) {
-    packet_duration = ToApproximateClockDuration(filtered_packet.duration, time_base);
+  if (packet_->duration > 0) {
+    packet_duration = ToApproximateClockDuration(packet_->duration, time_base);
   } else if (last_packet_timestamp_) {
     packet_duration = packet_timestamp - *last_packet_timestamp_;
   }
@@ -805,10 +758,13 @@ void SimulatedVideoPassthroughCapturer::DeliverCurrentPacket() {
   }
   last_packet_timestamp_ = packet_timestamp;
 
-  filtered_packet_storage_.assign(filtered_packet.data,
-                                  filtered_packet.data + filtered_packet.size);
-  const bool is_key_frame = (filtered_packet.flags & AV_PKT_FLAG_KEY) != 0;
-  av_packet_unref(&filtered_packet);
+  const bool is_key_frame = (packet_->flags & AV_PKT_FLAG_KEY) != 0;
+  if (!ConvertPacketToAnnexB(*packet_, is_key_frame)) {
+    av_packet_unref(packet_.get());
+    OnError("ConvertPacketToAnnexB", AVERROR_INVALIDDATA);
+    return;
+  }
+  av_packet_unref(packet_.get());
 
   const auto reference_time = start_time_ + (packet_timestamp - start_media_time_);
   next_task_.Schedule(
@@ -818,8 +774,8 @@ void SimulatedVideoPassthroughCapturer::DeliverCurrentPacket() {
                      filtered_packet_storage_.size()),
             is_key_frame,
             packet_timestamp, packet_duration, capture_begin_time_,
-            capture_begin_time_ + std::chrono::milliseconds(1), reference_time);
-        StartReadingNextPacket();
+            capture_begin_time_ + std::chrono::milliseconds(1),
+            reference_time);
       },
       reference_time);
 }
@@ -831,6 +787,108 @@ void SimulatedVideoPassthroughCapturer::OnError(const char* what, int av_errnum)
   next_task_.Schedule(
       [this, error_string = error.str()] { client_.OnError(this, error_string); },
       Alarm::kImmediately);
+}
+
+bool SimulatedVideoPassthroughCapturer::InitializeAvcConfiguration() {
+  const AVCodecParameters* codecpar = format_context_->streams[stream_index_]->codecpar;
+  const uint8_t* extradata = codecpar->extradata;
+  const int extradata_size = codecpar->extradata_size;
+  if (!extradata || extradata_size < 7) {
+    OnError("missing_avcc_extradata", AVERROR_INVALIDDATA);
+    return false;
+  }
+  if (extradata[0] != 1) {
+    OnError("unsupported_h264_extradata", AVERROR_INVALIDDATA);
+    return false;
+  }
+
+  nal_length_size_ = (extradata[4] & 0x03) + 1;
+  if (nal_length_size_ < 1 || nal_length_size_ > 4) {
+    OnError("invalid_nal_length_size", AVERROR_INVALIDDATA);
+    return false;
+  }
+
+  parameter_sets_annexb_.clear();
+  int offset = 5;
+  const int num_sps = extradata[offset++] & 0x1f;
+  for (int i = 0; i < num_sps; ++i) {
+    if (offset + 2 > extradata_size) {
+      OnError("truncated_sps_length", AVERROR_INVALIDDATA);
+      return false;
+    }
+    const int nal_size = (extradata[offset] << 8) | extradata[offset + 1];
+    offset += 2;
+    if (nal_size <= 0 || offset + nal_size > extradata_size) {
+      OnError("truncated_sps_nal", AVERROR_INVALIDDATA);
+      return false;
+    }
+    parameter_sets_annexb_.insert(parameter_sets_annexb_.end(),
+                                  {0x00, 0x00, 0x00, 0x01});
+    parameter_sets_annexb_.insert(parameter_sets_annexb_.end(),
+                                  extradata + offset,
+                                  extradata + offset + nal_size);
+    offset += nal_size;
+  }
+
+  if (offset + 1 > extradata_size) {
+    OnError("missing_pps_count", AVERROR_INVALIDDATA);
+    return false;
+  }
+  const int num_pps = extradata[offset++];
+  for (int i = 0; i < num_pps; ++i) {
+    if (offset + 2 > extradata_size) {
+      OnError("truncated_pps_length", AVERROR_INVALIDDATA);
+      return false;
+    }
+    const int nal_size = (extradata[offset] << 8) | extradata[offset + 1];
+    offset += 2;
+    if (nal_size <= 0 || offset + nal_size > extradata_size) {
+      OnError("truncated_pps_nal", AVERROR_INVALIDDATA);
+      return false;
+    }
+    parameter_sets_annexb_.insert(parameter_sets_annexb_.end(),
+                                  {0x00, 0x00, 0x00, 0x01});
+    parameter_sets_annexb_.insert(parameter_sets_annexb_.end(),
+                                  extradata + offset,
+                                  extradata + offset + nal_size);
+    offset += nal_size;
+  }
+  return true;
+}
+
+bool SimulatedVideoPassthroughCapturer::ConvertPacketToAnnexB(
+    const AVPacket& packet,
+    bool prepend_parameter_sets) {
+  if (!packet.data || packet.size <= 0) {
+    return false;
+  }
+
+  filtered_packet_storage_.clear();
+  if (prepend_parameter_sets && !parameter_sets_annexb_.empty()) {
+    filtered_packet_storage_.insert(filtered_packet_storage_.end(),
+                                    parameter_sets_annexb_.begin(),
+                                    parameter_sets_annexb_.end());
+  }
+
+  int offset = 0;
+  while (offset + nal_length_size_ <= packet.size) {
+    uint32_t nal_size = 0;
+    for (int i = 0; i < nal_length_size_; ++i) {
+      nal_size = (nal_size << 8) | packet.data[offset + i];
+    }
+    offset += nal_length_size_;
+    if (nal_size == 0 || offset + static_cast<int>(nal_size) > packet.size) {
+      return false;
+    }
+    filtered_packet_storage_.insert(filtered_packet_storage_.end(),
+                                    {0x00, 0x00, 0x00, 0x01});
+    filtered_packet_storage_.insert(filtered_packet_storage_.end(),
+                                    packet.data + offset,
+                                    packet.data + offset + nal_size);
+    offset += nal_size;
+  }
+
+  return offset == packet.size && !filtered_packet_storage_.empty();
 }
 
 Clock::duration SimulatedVideoPassthroughCapturer::ToApproximateClockDuration(

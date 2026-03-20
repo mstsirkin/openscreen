@@ -32,7 +32,8 @@ struct VideoViewport {
 // mobile UI: play/pause, seek, and viewport changes.
 class ControllableFileSender final : public SimulatedAudioCapturer::Client,
                                      public SimulatedVideoCapturer::Client,
-                                     public SimulatedVideoPassthroughCapturer::Client {
+                                     public SimulatedVideoPassthroughCapturer::Client,
+                                     public Sender::Observer {
  public:
   using ShutdownCallback = std::function<void()>;
 
@@ -77,6 +78,7 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
                            bool disable_passthrough = false);
   void SchedulePausedKeepalive();
   void SendPausedKeepaliveFrame();
+  void RetryPendingPassthroughPacket();
   void UpdateStatusOnConsole();
   Clock::duration ClampPosition(Clock::duration position) const;
   VideoViewport ClampViewport(const VideoViewport& viewport) const;
@@ -104,6 +106,8 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
                const std::string& message) final;
   void OnError(SimulatedVideoPassthroughCapturer* capturer,
                const std::string& message) final;
+  void OnFrameCanceled(FrameId frame_id) final;
+  void OnPictureLost() final;
 
   std::unique_ptr<StreamingVideoEncoder> CreateVideoEncoder(
       const StreamingVideoEncoder::Parameters& params,
@@ -138,6 +142,7 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
   Alarm next_task_;
   Alarm console_update_task_;
   Alarm paused_keepalive_task_;
+  Alarm passthrough_retry_task_;
 
   Clock::duration media_duration_{};
   Clock::duration start_position_{};
@@ -146,7 +151,18 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
   bool is_playing_ = false;
   bool can_passthrough_video_ = false;
   bool passthrough_active_ = false;
+  bool passthrough_backpressured_ = false;
   std::string active_mode_;
+  struct PendingPassthroughPacket {
+    std::vector<uint8_t> data;
+    bool is_key_frame = false;
+    Clock::duration media_timestamp{};
+    Clock::duration media_duration{};
+    Clock::time_point capture_begin_time{};
+    Clock::time_point capture_end_time{};
+    Clock::time_point reference_time{};
+  };
+  std::optional<PendingPassthroughPacket> pending_passthrough_packet_;
 
   VideoViewport viewport_;
 #if defined(__ANDROID__) && !defined(CAST_STANDALONE_SENDER_HAVE_MEDIACODEC)

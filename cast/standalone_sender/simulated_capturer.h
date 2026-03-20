@@ -275,11 +275,14 @@ class SimulatedVideoPassthroughCapturer final {
 
   void SetPlaybackRate(double rate);
   void SeekTo(Clock::duration media_time, Clock::time_point new_start_time);
+  void Continue();
 
  private:
   void StartReadingNextPacket();
   void DeliverCurrentPacket();
   void OnError(const char* what, int av_errnum);
+  bool InitializeAvcConfiguration();
+  bool ConvertPacketToAnnexB(const AVPacket& packet, bool prepend_parameter_sets);
   static Clock::duration ToApproximateClockDuration(int64_t ticks,
                                                     const AVRational& time_base);
 
@@ -294,7 +297,8 @@ class SimulatedVideoPassthroughCapturer final {
   bool playback_rate_is_non_zero_ = true;
   std::optional<Clock::duration> last_packet_timestamp_;
   Clock::time_point capture_begin_time_;
-  AVBSFContext* bitstream_filter_ = nullptr;
+  int nal_length_size_ = 4;
+  std::vector<uint8_t> parameter_sets_annexb_;
   std::vector<uint8_t> filtered_packet_storage_;
 };
 

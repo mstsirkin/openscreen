@@ -1,6 +1,7 @@
 package org.openscreen.controlcast
 
 import android.content.Context
+import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
@@ -71,6 +72,7 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -78,11 +80,102 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.receiveAsFlow
+
+sealed interface DebugCommand {
+    data class Connect(val target: String) : DebugCommand
+    data object Disconnect : DebugCommand
+    data class OpenVideo(
+        val uri: Uri,
+        val startPlaying: Boolean,
+        val startPositionMs: Long,
+    ) : DebugCommand
+    data object Play : DebugCommand
+    data object Pause : DebugCommand
+    data class SeekTo(
+        val positionMs: Long?,
+        val offsetsMs: List<Long>,
+        val timesMs: List<Long>,
+    ) : DebugCommand
+    data object ResetView : DebugCommand
+    data class SetLocalMirror(val enabled: Boolean) : DebugCommand
+    data class SetLocalSound(val enabled: Boolean) : DebugCommand
+    data class SetHwEncode(val enabled: Boolean) : DebugCommand
+    data object Print : DebugCommand
+}
+
+private fun parseLongListExtra(raw: String?): List<Long> =
+    raw
+        ?.split(',', ';', ' ')
+        ?.mapNotNull { token -> token.trim().takeIf { it.isNotEmpty() }?.toLongOrNull() }
+        ?: emptyList()
+
+private fun Intent.toDebugCommand(): DebugCommand? {
+    return when (action) {
+        "org.openscreen.controlcast.DEBUG_CONNECT" ->
+            getStringExtra("target")?.takeIf { it.isNotBlank() }?.let(DebugCommand::Connect)
+        "org.openscreen.controlcast.DEBUG_DISCONNECT" -> DebugCommand.Disconnect
+        "org.openscreen.controlcast.DEBUG_OPEN_VIDEO" -> {
+            val uri = data ?: getParcelableExtra(Intent.EXTRA_STREAM)
+                ?: getStringExtra("uri")?.let(Uri::parse)
+            uri?.let {
+                DebugCommand.OpenVideo(
+                    uri = it,
+                    startPlaying = getBooleanExtra("start_playing", false),
+                    startPositionMs = getLongExtra("start_position_ms", 0L),
+                )
+            }
+        }
+        "org.openscreen.controlcast.DEBUG_PLAY" -> DebugCommand.Play
+        "org.openscreen.controlcast.DEBUG_PAUSE" -> DebugCommand.Pause
+        "org.openscreen.controlcast.DEBUG_SEEK_TO" -> {
+            val hasPosition = hasExtra("position_ms")
+            val offsetsMs = parseLongListExtra(getStringExtra("offsets_ms"))
+            val timesMs = parseLongListExtra(getStringExtra("times_ms"))
+            DebugCommand.SeekTo(
+                positionMs = if (hasPosition) getLongExtra("position_ms", 0L).coerceAtLeast(0L) else null,
+                offsetsMs = offsetsMs,
+                timesMs = timesMs,
+            )
+        }
+        "org.openscreen.controlcast.DEBUG_RESET_VIEW" -> DebugCommand.ResetView
+        "org.openscreen.controlcast.DEBUG_SET_LOCAL_MIRROR" ->
+            DebugCommand.SetLocalMirror(getBooleanExtra("enabled", true))
+        "org.openscreen.controlcast.DEBUG_SET_LOCAL_SOUND" ->
+            DebugCommand.SetLocalSound(getBooleanExtra("enabled", true))
+        "org.openscreen.controlcast.DEBUG_SET_HW_ENCODE" ->
+            DebugCommand.SetHwEncode(getBooleanExtra("enabled", true))
+        "org.openscreen.controlcast.DEBUG_PRINT" -> DebugCommand.Print
+        else -> null
+    }
+}
+
+private fun debugTargetToCastDevice(target: String): CastDevice? {
+    val trimmed = target.trim()
+    if (trimmed.isEmpty()) return null
+    val endBracket = trimmed.lastIndexOf(']')
+    return if (trimmed.startsWith("[") && endBracket > 0 && endBracket + 1 < trimmed.length &&
+        trimmed[endBracket + 1] == ':'
+    ) {
+        val host = trimmed.substring(1, endBracket)
+        val port = trimmed.substring(endBracket + 2).toIntOrNull() ?: return null
+        CastDevice(trimmed, host, port)
+    } else {
+        val colon = trimmed.lastIndexOf(':')
+        if (colon <= 0 || colon == trimmed.lastIndex) return null
+        val host = trimmed.substring(0, colon)
+        val port = trimmed.substring(colon + 1).toIntOrNull() ?: return null
+        CastDevice(trimmed, host, port)
+    }
+}
 
 class MainActivity : ComponentActivity() {
     // Saved across rotation via onSaveInstanceState
     var savedPosition = 0L
     var savedPlaying = false
+    private val debugCommands = Channel<DebugCommand>(Channel.UNLIMITED)
+
+    fun debugCommandsFlow() = debugCommands.receiveAsFlow()
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
@@ -105,6 +198,10 @@ class MainActivity : ComponentActivity() {
             android.Manifest.permission.CAMERA,
             android.Manifest.permission.RECORD_AUDIO,
         ))
+    }
+
+    private fun enqueueDebugIntent(intent: Intent?) {
+        intent?.toDebugCommand()?.let { debugCommands.trySend(it) }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -135,6 +232,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        enqueueDebugIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        enqueueDebugIntent(intent)
     }
 
     private fun bindProcessToWifi() {
@@ -556,6 +660,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var selectedUri by rememberSaveable { mutableStateOf<Uri?>(null) }
     var localMirrorEnabled by rememberSaveable { mutableStateOf(true) }
     var localSoundEnabled by rememberSaveable { mutableStateOf(false) }
+    var hwEncodeEnabled by rememberSaveable { mutableStateOf(true) }
     var isPlaying by rememberSaveable { mutableStateOf(false) }
     var durationMs by rememberSaveable { mutableLongStateOf(0L) }
     var positionMs by rememberSaveable { mutableLongStateOf(0L) }
@@ -609,6 +714,115 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         }
         coroutineScope.launch {
             connection.connect(device)
+        }
+    }
+
+    fun setLocalMirrorEnabled(enabled: Boolean) {
+        localMirrorEnabled = enabled
+        backend.setMirrorLocally(enabled)
+        if (!enabled) {
+            exoPlayer.pause()
+        }
+    }
+
+    fun setLocalSoundEnabled(enabled: Boolean) {
+        localSoundEnabled = enabled
+        exoPlayer.volume = if (enabled) 1f else 0f
+    }
+
+    fun setHwEncodeEnabled(enabled: Boolean) {
+        hwEncodeEnabled = enabled
+        backend.setHwEncode(enabled)
+    }
+
+    fun pauseBoth() {
+        exoPlayer.pause()
+        connection.pause()
+        isPlaying = false
+    }
+
+    fun playBoth() {
+        exoPlayer.play()
+        connection.play()
+        isPlaying = true
+    }
+
+    fun seekBoth(targetPositionMs: Long) {
+        positionMs = targetPositionMs.coerceAtLeast(0L)
+        sliderValue = if (durationMs > 0L) {
+            positionMs.toFloat() / durationMs.toFloat()
+        } else {
+            0f
+        }
+        exoPlayer.seekTo(positionMs)
+        connection.seekTo(positionMs)
+    }
+
+    suspend fun runSeekSequence(command: DebugCommand.SeekTo) {
+        val basePosition = command.positionMs ?: positionMs
+        if (command.offsetsMs.isNotEmpty()) {
+            val times = if (command.timesMs.isNotEmpty()) command.timesMs else List(command.offsetsMs.size) { it * 200L }
+            var lastTime = 0L
+            command.offsetsMs.forEachIndexed { index, offset ->
+                val targetTime = times.getOrElse(index) { times.lastOrNull() ?: 0L }.coerceAtLeast(lastTime)
+                val delayMs = (targetTime - lastTime).coerceAtLeast(0L)
+                if (delayMs > 0L) delay(delayMs)
+                seekBoth((basePosition + offset).coerceAtLeast(0L))
+                lastTime = targetTime
+            }
+        } else if (command.positionMs != null) {
+            seekBoth(command.positionMs)
+        }
+    }
+
+    fun printDebugState(reason: String) {
+        backend.syncStatus()
+        android.util.Log.i(
+            "ControlCast",
+            buildString {
+                append("DEBUG_PRINT reason=").append(reason)
+                append(" connection=").append(connectionState)
+                append(" target=").append(connectedDevice?.target ?: "")
+                append(" selectedUri=").append(selectedUri ?: "")
+                append(" isPlaying=").append(isPlaying)
+                append(" exoPos=").append(exoPlayer.currentPosition.coerceAtLeast(0L))
+                append(" exoDur=").append(exoPlayer.duration.coerceAtLeast(0L))
+                append(" castPos=").append(connection.getCastPositionMs())
+                append(" castDur=").append(connection.getCastDurationMs())
+                append(" castPlaying=").append(connection.isCastPlaying())
+                append(" localMirror=").append(localMirrorEnabled)
+                append(" localSound=").append(localSoundEnabled)
+                append(" hwEncode=").append(hwEncodeEnabled)
+                append(" viewport=").append(viewport.zoom).append(',').append(viewport.offsetX).append(',').append(viewport.offsetY)
+                append(" backendStatus=").append(backend.status.value)
+            },
+        )
+    }
+
+    suspend fun openVideoFromCommand(
+        uri: Uri,
+        startPlaying: Boolean,
+        startPositionMs: Long,
+    ) {
+        selectedUri = uri
+        val mediaItem = MediaItem.fromUri(uri)
+        exoPlayer.setMediaItem(mediaItem)
+        exoPlayer.prepare()
+        exoPlayer.seekTo(startPositionMs.coerceAtLeast(0L))
+        if (localMirrorEnabled && startPlaying) {
+            exoPlayer.play()
+        } else {
+            exoPlayer.pause()
+        }
+        isPlaying = startPlaying
+        positionMs = startPositionMs.coerceAtLeast(0L)
+        sliderValue = if (durationMs > 0L) {
+            positionMs.toFloat() / durationMs.toFloat()
+        } else {
+            0f
+        }
+        if (connectionState == Connection.State.CONNECTED) {
+            openSelectedVideoOnCast(uri, startPlaying, positionMs)
         }
     }
 
@@ -707,6 +921,43 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                         exoPlayer.currentPosition.coerceAtLeast(0L),
                     )
                 }
+            }
+        }
+    }
+
+    LaunchedEffect(activity, discoveredDevices, connectionState, connectedDevice, selectedUri) {
+        val debugFlow = activity?.debugCommandsFlow() ?: return@LaunchedEffect
+        debugFlow.collect { command ->
+            when (command) {
+                is DebugCommand.Connect -> {
+                    val device = discoveredDevices.firstOrNull { it.target == command.target }
+                    if (device != null) {
+                        connectToDevice(device)
+                    } else {
+                        debugTargetToCastDevice(command.target)?.let { parsed ->
+                            coroutineScope.launch {
+                                connection.connect(parsed)
+                            }
+                        }
+                    }
+                }
+                DebugCommand.Disconnect -> connection.disconnect()
+                is DebugCommand.OpenVideo -> openVideoFromCommand(
+                    command.uri,
+                    command.startPlaying,
+                    command.startPositionMs,
+                )
+                DebugCommand.Play -> playBoth()
+                DebugCommand.Pause -> pauseBoth()
+                is DebugCommand.SeekTo -> runSeekSequence(command)
+                DebugCommand.ResetView -> {
+                    viewport = ViewportState()
+                    backend.updateViewport(viewport)
+                }
+                is DebugCommand.SetLocalMirror -> setLocalMirrorEnabled(command.enabled)
+                is DebugCommand.SetLocalSound -> setLocalSoundEnabled(command.enabled)
+                is DebugCommand.SetHwEncode -> setHwEncodeEnabled(command.enabled)
+                DebugCommand.Print -> printDebugState("intent")
             }
         }
     }
@@ -971,14 +1222,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             }
             Button(
                 onClick = {
-                    if (isPlaying) {
-                        exoPlayer.pause()
-                        connection.pause()
-                    } else {
-                        exoPlayer.play()
-                        connection.play()
-                    }
-                    isPlaying = !isPlaying
+                    if (isPlaying) pauseBoth() else playBoth()
                 },
                 enabled = selectedUri != null,
             ) {
@@ -998,22 +1242,16 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         ) {
             Switch(
                 checked = localMirrorEnabled,
-                    onCheckedChange = {
-                        localMirrorEnabled = it
-                        backend.setMirrorLocally(it)
-                    if (!it) {
-                        exoPlayer.pause()
-                    }
+                onCheckedChange = {
+                    setLocalMirrorEnabled(it)
                 },
             )
             Text("Local mirror", color = Color(0xFFD9E2EC))
             Spacer(modifier = Modifier.width(12.dp))
-            var hwEncodeEnabled by rememberSaveable { mutableStateOf(true) }
             Switch(
                 checked = hwEncodeEnabled,
                 onCheckedChange = {
-                    hwEncodeEnabled = it
-                    backend.setHwEncode(it)
+                    setHwEncodeEnabled(it)
                 },
             )
             Text("HW enc", color = Color(0xFFD9E2EC))
@@ -1026,8 +1264,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             Switch(
                 checked = localSoundEnabled,
                 onCheckedChange = {
-                    localSoundEnabled = it
-                    exoPlayer.volume = if (it) 1f else 0f
+                    setLocalSoundEnabled(it)
                 },
             )
             Text("Local sound", color = Color(0xFFD9E2EC))
@@ -1129,14 +1366,12 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                     val now = System.currentTimeMillis()
                     if (now - lastSeekMs > 200) {
                         lastSeekMs = now
-                        exoPlayer.seekTo(positionMs)
-                        connection.seekTo(positionMs)
+                        seekBoth(positionMs)
                     }
                 },
                 onValueChangeFinished = {
                     sliderDragging = false
-                    exoPlayer.seekTo(positionMs)
-                    connection.seekTo(positionMs)
+                    seekBoth(positionMs)
                 },
                 enabled = durationMs > 0L,
             )
