@@ -67,7 +67,8 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
 
   void UpdateEncoderBitrates();
   void ControlForNetworkCongestion();
-  void StartPlaybackAt(Clock::duration position);
+  void StartPlaybackAt(Clock::duration position,
+                       bool allow_passthrough = true);
   void StartPausedKeepaliveAt(Clock::duration position);
   void StopCapturers();
   bool CanUseVideoPassthrough();

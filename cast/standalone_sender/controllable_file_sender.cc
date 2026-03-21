@@ -221,7 +221,8 @@ void ControllableFileSender::ControlForNetworkCongestion() {
                              kCongestionCheckInterval);
 }
 
-void ControllableFileSender::StartPlaybackAt(Clock::duration position) {
+void ControllableFileSender::StartPlaybackAt(Clock::duration position,
+                                             bool allow_passthrough) {
   StopCapturers();
   start_position_ = ClampPosition(position);
   last_known_position_ = start_position_;
@@ -241,7 +242,7 @@ void ControllableFileSender::StartPlaybackAt(Clock::duration position) {
                           audio_encoder_.num_channels(),
                           audio_encoder_.sample_rate(), playback_start_time_,
                           start_position_, *this);
-  if (CanStartVideoPassthroughAt(start_position_)) {
+  if (allow_passthrough && CanStartVideoPassthroughAt(start_position_)) {
     video_passthrough_capturer_.emplace(env_, settings_.path_to_file.c_str(),
                                         playback_start_time_, start_position_,
                                         *this);
@@ -338,6 +339,7 @@ bool ControllableFileSender::CanUseVideoPassthrough() {
 bool ControllableFileSender::CanStartVideoPassthroughAt(
     Clock::duration position) const {
   return settings_.should_include_video && can_passthrough_video_ &&
+         video_sender_ && !video_encoder_ &&
          IsViewportIdentity() &&
          (media_duration_ <= Clock::duration::zero() || position < media_duration_);
 }
@@ -371,7 +373,7 @@ void ControllableFileSender::FallbackToTranscode(const char* reason,
   active_mode_ = std::string("fallback transcode: ") + reason;
   EnsureVideoEncoderCreated();
   if (resume_playback) {
-    StartPlaybackAt(position);
+    StartPlaybackAt(position, false);
     if (!disable_passthrough && can_passthrough_video_ && IsViewportIdentity()) {
       StartPassthroughReentryProbe(position);
     }

@@ -864,31 +864,35 @@ bool SimulatedVideoPassthroughCapturer::ConvertPacketToAnnexB(
   }
 
   filtered_packet_storage_.clear();
+  filtered_packet_storage_.reserve(
+      static_cast<size_t>(packet.size) + parameter_sets_annexb_.size() + 16);
   if (prepend_parameter_sets && !parameter_sets_annexb_.empty()) {
     filtered_packet_storage_.insert(filtered_packet_storage_.end(),
                                     parameter_sets_annexb_.begin(),
                                     parameter_sets_annexb_.end());
   }
 
-  int offset = 0;
-  while (offset + nal_length_size_ <= packet.size) {
+  const size_t packet_size = static_cast<size_t>(packet.size);
+  size_t offset = 0;
+  while (offset + static_cast<size_t>(nal_length_size_) <= packet_size) {
     uint32_t nal_size = 0;
     for (int i = 0; i < nal_length_size_; ++i) {
       nal_size = (nal_size << 8) | packet.data[offset + i];
     }
-    offset += nal_length_size_;
-    if (nal_size == 0 || offset + static_cast<int>(nal_size) > packet.size) {
+    offset += static_cast<size_t>(nal_length_size_);
+    const size_t remaining = packet_size - offset;
+    if (nal_size == 0 || static_cast<size_t>(nal_size) > remaining) {
       return false;
     }
     filtered_packet_storage_.insert(filtered_packet_storage_.end(),
                                     {0x00, 0x00, 0x00, 0x01});
     filtered_packet_storage_.insert(filtered_packet_storage_.end(),
                                     packet.data + offset,
-                                    packet.data + offset + nal_size);
-    offset += nal_size;
+                                    packet.data + offset + static_cast<size_t>(nal_size));
+    offset += static_cast<size_t>(nal_size);
   }
 
-  return offset == packet.size && !filtered_packet_storage_.empty();
+  return offset == packet_size && !filtered_packet_storage_.empty();
 }
 
 Clock::duration SimulatedVideoPassthroughCapturer::ToApproximateClockDuration(
