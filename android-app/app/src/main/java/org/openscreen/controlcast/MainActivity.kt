@@ -741,6 +741,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var lastCastSeekDispatchRealtimeMs by remember { mutableLongStateOf(0L) }
     var pendingCastSeekTargetMs by remember { mutableLongStateOf(-1L) }
     var pendingCastSeekJob by remember { mutableStateOf<Job?>(null) }
+    var lastObservedCastPlaying by remember { mutableStateOf(false) }
     val connectionState = connection.state
     val connectedDevice = connection.target
     val isConnected = connectionState == Connection.State.CONNECTED
@@ -756,6 +757,12 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
 
     fun openSelectedVideoOnCast(uri: Uri, startPlaying: Boolean, startPositionMs: Long = 0L) {
         if (connectedDevice == null || connectionState != Connection.State.CONNECTED) return
+        // Sync policy:
+        // 1. Initial handoff after connect/open/seek/resume-from-paused is local -> cast.
+        //    We seed Cast from the current local/Exo position because the TV has
+        //    not established visible playback yet.
+        // 2. Once Cast is actively running, steady-state correction becomes
+        //    cast -> local in the polling loop below.
         android.util.Log.i(
             "ControlCast",
             "openSelectedVideoOnCast uri=$uri startPlaying=$startPlaying startPositionMs=$startPositionMs castOpenedUri=$castOpenedUri connectionState=$connectionState",
@@ -904,18 +911,14 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         startPlaying: Boolean,
         startPositionMs: Long,
     ) {
-        reconnectResumeArmed =
-            startPlaying && connectionState != Connection.State.CONNECTED
+        reconnectResumeArmed = false
         reconnectResumeUri = uri.toString()
         selectedUri = uri
         val mediaItem = MediaItem.fromUri(uri)
         exoPlayer.setMediaItem(mediaItem)
         exoPlayer.prepare()
         exoPlayer.seekTo(startPositionMs.coerceAtLeast(0L))
-        if (localMirrorEnabled &&
-            startPlaying &&
-            connectionState == Connection.State.DISCONNECTED
-        ) {
+        if (localMirrorEnabled && startPlaying) {
             exoPlayer.play()
         } else {
             exoPlayer.pause()
@@ -1003,6 +1006,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             } else {
                 localMirrorEnabled
             }
+            // Exception for externally shared media: keep local paused until Cast is
+            // connected/opened so the app does not race ahead from a cold start.
             reconnectResumeArmed =
                 shouldStartPlaying && connectionState != Connection.State.CONNECTED
             reconnectResumeUri = sharedUri.toString()
@@ -1010,10 +1015,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             val mediaItem = MediaItem.fromUri(sharedUri)
             exoPlayer.setMediaItem(mediaItem)
             exoPlayer.prepare()
-            if (localMirrorEnabled &&
-                shouldStartPlaying &&
-                connectionState == Connection.State.DISCONNECTED
-            ) {
+            if (localMirrorEnabled && shouldStartPlaying && connectionState == Connection.State.CONNECTED) {
                 exoPlayer.play()
             } else {
                 exoPlayer.pause()
@@ -1146,6 +1148,13 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 castDur
             }
             if (castConnected && exoHasMedia && restored) {
+                val castStartedThisTick = castPlaying && !lastObservedCastPlaying
+                if (castStartedThisTick && castPos > 0L) {
+                    exoPlayer.seekTo(castPos)
+                }
+                // After Cast is actively running, Cast becomes the authority for
+                // steady-state correction. This keeps local preview from drifting
+                // away from the real TV playback path during fallback/re-entry.
                 val driftMs = kotlin.math.abs(exoPos - castPos)
                 val recentSeek = latestSeekRealtimeMs > 0L &&
                     android.os.SystemClock.elapsedRealtime() - latestSeekRealtimeMs < 2500L
@@ -1163,6 +1172,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                     exoPlayer.pause()
                 }
             }
+            lastObservedCastPlaying = castPlaying
             if (!sliderDragging && restored) {
                 positionMs = if (castConnected && castPos > 0L) {
                     castPos
@@ -1195,8 +1205,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             } else {
                 localMirrorEnabled
             }
-            reconnectResumeArmed =
-                shouldStartPlaying && connectionState != Connection.State.CONNECTED
+            reconnectResumeArmed = false
             reconnectResumeUri = uri.toString()
             context.contentResolver.takePersistableUriPermission(
                 uri,
@@ -1206,10 +1215,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             val mediaItem = MediaItem.fromUri(uri)
             exoPlayer.setMediaItem(mediaItem)
             exoPlayer.prepare()
-            if (localMirrorEnabled &&
-                shouldStartPlaying &&
-                connectionState == Connection.State.DISCONNECTED
-            ) {
+            if (localMirrorEnabled && shouldStartPlaying) {
                 exoPlayer.play()
             } else {
                 exoPlayer.pause()
