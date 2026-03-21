@@ -1508,7 +1508,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                     },
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .padding(8.dp)
+                        .padding(top = 8.dp, end = 72.dp)
                         .size(36.dp),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp),
                     colors = androidx.compose.material3.ButtonDefaults.buttonColors(
