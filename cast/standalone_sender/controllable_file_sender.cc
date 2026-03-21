@@ -671,6 +671,46 @@ std::string ControllableFileSender::GetActiveModeString() const {
   return active_mode_;
 }
 
+std::string ControllableFileSender::GetDebugStateString() const {
+  std::ostringstream stream;
+  stream << "pt_active=" << (passthrough_active_ ? 1 : 0)
+         << " pt_bp=" << (passthrough_backpressured_ ? 1 : 0)
+         << " pt_reentry=" << (passthrough_reentry_pending_ ? 1 : 0)
+         << " pending_pkt=" << (pending_passthrough_packet_ ? 1 : 0)
+         << " playing=" << (is_playing_ ? 1 : 0)
+         << " pos_ms=" << to_milliseconds(last_known_position_).count()
+         << " start_ms=" << to_milliseconds(start_position_).count();
+  if (pending_passthrough_packet_) {
+    stream << " pending_ts_ms="
+           << to_milliseconds(pending_passthrough_packet_->media_timestamp)
+                  .count()
+           << " pending_dur_ms="
+           << to_milliseconds(pending_passthrough_packet_->media_duration)
+                  .count()
+           << " pending_key="
+           << (pending_passthrough_packet_->is_key_frame ? 1 : 0)
+           << " pending_bytes=" << pending_passthrough_packet_->data.size();
+    if (video_sender_) {
+      const auto pending_rtp = RtpTimeTicks::FromTimeSinceOrigin(
+          pending_passthrough_packet_->media_timestamp,
+          video_sender_->rtp_timebase());
+      stream << " pending_inflight_ms="
+             << to_milliseconds(
+                    video_sender_->GetInFlightMediaDuration(pending_rtp))
+                    .count()
+             << " pending_max_inflight_ms="
+             << to_milliseconds(video_sender_->GetMaxInFlightMediaDuration())
+                    .count();
+    }
+  } else if (video_sender_) {
+    stream << " pending_max_inflight_ms="
+           << to_milliseconds(video_sender_->GetMaxInFlightMediaDuration())
+                  .count();
+  }
+  stream << " capturers=" << num_capturers_running_;
+  return stream.str();
+}
+
 std::unique_ptr<StreamingVideoEncoder> ControllableFileSender::CreateVideoEncoder(
     const StreamingVideoEncoder::Parameters& params,
     TaskRunner& task_runner,

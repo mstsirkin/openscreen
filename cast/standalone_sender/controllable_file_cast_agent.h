@@ -58,6 +58,7 @@ class ControllableFileCastAgent final
   bool IsConnected() const;
   bool IsPlaying() const;
   std::string GetActiveModeString() const;
+  std::string GetDebugStateString() const;
 
  private:
   void OnConnected(SenderSocketFactory* factory,

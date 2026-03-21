@@ -58,6 +58,7 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
   Clock::duration GetDuration() const;
   bool is_playing() const { return is_playing_; }
   std::string GetActiveModeString() const;
+  std::string GetDebugStateString() const;
 
  private:
   static constexpr int kDisplayWidth = 1920;

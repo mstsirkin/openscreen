@@ -726,6 +726,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var castOpenedUri by rememberSaveable { mutableStateOf<String?>(null) }
     var reconnectResumeArmed by rememberSaveable { mutableStateOf(false) }
     var reconnectResumeUri by rememberSaveable { mutableStateOf<String?>(null) }
+    var latestSeekTargetMs by rememberSaveable { mutableLongStateOf(-1L) }
+    var latestSeekRealtimeMs by rememberSaveable { mutableLongStateOf(0L) }
     val connectionState = connection.state
     val connectedDevice = connection.target
     val isConnected = connectionState == Connection.State.CONNECTED
@@ -796,6 +798,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
 
     fun seekBoth(targetPositionMs: Long) {
         reconnectResumeArmed = false
+        latestSeekTargetMs = targetPositionMs.coerceAtLeast(0L)
+        latestSeekRealtimeMs = android.os.SystemClock.elapsedRealtime()
         positionMs = targetPositionMs.coerceAtLeast(0L)
         sliderValue = if (durationMs > 0L) {
             positionMs.toFloat() / durationMs.toFloat()
@@ -825,6 +829,9 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
 
     fun printDebugState(reason: String) {
         backend.syncStatus()
+        val castPos = connection.getCastPositionMs()
+        val exoPos = exoPlayer.currentPosition.coerceAtLeast(0L)
+        val now = android.os.SystemClock.elapsedRealtime()
         android.util.Log.i(
             "ControlCast",
             buildString {
@@ -833,11 +840,17 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 append(" target=").append(connectedDevice?.target ?: "")
                 append(" selectedUri=").append(selectedUri ?: "")
                 append(" isPlaying=").append(isPlaying)
-                append(" exoPos=").append(exoPlayer.currentPosition.coerceAtLeast(0L))
+                append(" exoPos=").append(exoPos)
                 append(" exoDur=").append(exoPlayer.duration.coerceAtLeast(0L))
-                append(" castPos=").append(connection.getCastPositionMs())
+                append(" castPos=").append(castPos)
                 append(" castDur=").append(connection.getCastDurationMs())
                 append(" castPlaying=").append(connection.isCastPlaying())
+                append(" exoMinusCast=").append(exoPos - castPos)
+                append(" latestSeekTarget=").append(latestSeekTargetMs)
+                append(" latestSeekAgeMs=")
+                    .append(if (latestSeekRealtimeMs > 0L) now - latestSeekRealtimeMs else -1L)
+                append(" castMinusLatestSeek=")
+                    .append(if (latestSeekTargetMs >= 0L) castPos - latestSeekTargetMs else Long.MIN_VALUE)
                 append(" localMirror=").append(localMirrorEnabled)
                 append(" localSound=").append(localSoundEnabled)
                 append(" hwEncode=").append(hwEncodeEnabled)

@@ -133,6 +133,13 @@ std::string ControllableFileCastAgent::GetActiveModeString() const {
   return "idle";
 }
 
+std::string ControllableFileCastAgent::GetDebugStateString() const {
+  if (sender_) {
+    return sender_->GetDebugStateString();
+  }
+  return {};
+}
+
 void ControllableFileCastAgent::SetAvSyncOffset(Clock::duration offset) {
   if (sender_) {
     sender_->SetAvSyncOffset(offset);
