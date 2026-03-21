@@ -697,7 +697,7 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeSeekTo(
     jlong position_ms) {
   auto& state = State();
   long long pos = std::max<long long>(0, position_ms);
-  bool should_restart_session = false;
+  bool should_restart_media = false;
   LOGI("nativeSeekTo request: pos=%lld connected=%d playing=%d state_pos=%lld",
        pos, state.connection.connected, state.playing, state.position_ms);
 #ifdef HAVE_OPENSCREEN
@@ -714,7 +714,7 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeSeekTo(
         state.connection.rapid_seek_count = 1;
       }
       state.connection.last_seek_at = now;
-      should_restart_session =
+      should_restart_media =
           state.connection.rapid_seek_count >= kSeekStormThreshold &&
           !state.connection.target.empty() &&
           !state.video_path.empty() &&
@@ -722,14 +722,15 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeSeekTo(
                0 ||
            now - state.connection.last_seek_restart_at >=
                kSeekStormRestartCooldown);
-      if (should_restart_session) {
+      if (should_restart_media) {
         state.connection.last_seek_restart_at = now;
         state.connection.rapid_seek_count = 0;
         state.connection.paused_seek_queue.clear();
         state.connection.paused_seek_drain_posted = false;
         state.desired_playing = true;
         state.playing = true;
-        LOGI("nativeSeekTo storm: forcing session restart at pos=%lld", pos);
+        LOGI("nativeSeekTo storm: forcing in-session media restart at pos=%lld",
+             pos);
       }
       if (queue_paused_seek) {
         if (state.connection.paused_seek_queue.size() >=
@@ -749,8 +750,17 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeSeekTo(
         }
       }
     }
-    if (should_restart_session) {
-      RequestCastSessionRestart(state);
+    if (should_restart_media) {
+      state.task_runner->PostTask([&state, pos]() {
+        if (state.connection.cast) {
+          LOGI("nativeSeekTo storm exec: target=%lld agent_pos_before=%lld",
+               pos, GetAgentPositionMsForLog(state));
+          state.connection.cast->RecoverFromSeekStorm(
+              std::chrono::milliseconds(pos), true);
+          LOGI("nativeSeekTo storm exec: target=%lld agent_pos_after=%lld",
+               pos, GetAgentPositionMsForLog(state));
+        }
+      });
     } else if (!queue_paused_seek) {
       state.task_runner->PostTask([&state, pos]() {
         if (state.connection.cast) {

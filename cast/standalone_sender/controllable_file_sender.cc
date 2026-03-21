@@ -146,6 +146,18 @@ void ControllableFileSender::SeekBy(Clock::duration delta) {
   SeekTo(GetCurrentPosition() + delta);
 }
 
+void ControllableFileSender::RecoverFromSeekStorm(Clock::duration position,
+                                                  bool resume_playback) {
+  last_known_position_ = ClampPosition(position);
+  if (resume_playback) {
+    // Drop stale in-flight production inside the current Cast session, restart
+    // immediately in transcode mode, and allow passthrough re-entry later.
+    FallbackToTranscode("seek storm", last_known_position_, true);
+  } else {
+    StartPausedKeepaliveAt(last_known_position_);
+  }
+}
+
 void ControllableFileSender::SetViewport(const VideoViewport& viewport) {
   viewport_ = ClampViewport(viewport);
   if (passthrough_active_ && !IsViewportIdentity()) {

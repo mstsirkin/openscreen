@@ -50,6 +50,7 @@ class ControllableFileCastAgent final
   void Pause();
   void SeekTo(Clock::duration position);
   void SeekBy(Clock::duration delta);
+  void RecoverFromSeekStorm(Clock::duration position, bool resume_playback);
   void SetViewport(const VideoViewport& viewport);
   void ResetViewport();
   void SetAvSyncOffset(Clock::duration offset);

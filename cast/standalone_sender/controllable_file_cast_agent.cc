@@ -89,6 +89,15 @@ void ControllableFileCastAgent::SeekBy(Clock::duration delta) {
   }
 }
 
+void ControllableFileCastAgent::RecoverFromSeekStorm(Clock::duration position,
+                                                     bool resume_playback) {
+  desired_position_ = position;
+  desired_paused_ = !resume_playback;
+  if (sender_) {
+    sender_->RecoverFromSeekStorm(position, resume_playback);
+  }
+}
+
 void ControllableFileCastAgent::SetViewport(const VideoViewport& viewport) {
   desired_viewport_ = viewport;
   if (sender_) {
