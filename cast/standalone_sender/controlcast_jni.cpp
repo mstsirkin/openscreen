@@ -167,7 +167,7 @@ openscreen::IPEndpoint ParseTarget(const std::string& target) {
   return {};
 }
 
-void RequestCastSessionRestart(ControllerState& state);
+void RequestCastSessionRestart(ControllerState& state, const char* reason);
 void DrainPausedSeekQueue(ControllerState& state);
 
 void EnsureTaskRunner(ControllerState& state) {
@@ -250,7 +250,9 @@ void StartCastSessionOnTaskRunner(ControllerState& state,
                    static_cast<long long>(retry_delay.count()), target.c_str(),
                    video_path.c_str());
               state.connection.reconnect_alarm->ScheduleFromNow(
-                  [&state]() { RequestCastSessionRestart(state); }, retry_delay);
+                  [&state]() {
+                    RequestCastSessionRestart(state, "reconnect_alarm");
+                  }, retry_delay);
             }
           });
 
@@ -302,7 +304,7 @@ void StartCastSessionOnTaskRunner(ControllerState& state,
   LOGI("TaskRunner: connect initiated");
 }
 
-void RequestCastSessionRestart(ControllerState& state) {
+void RequestCastSessionRestart(ControllerState& state, const char* reason) {
   std::string target;
   std::string video_path;
   {
@@ -314,8 +316,8 @@ void RequestCastSessionRestart(ControllerState& state) {
     }
     ++state.connection.desired_session_generation;
     if (state.connection.session_restart_posted) {
-      LOGI("RequestCastSessionRestart: coalesced target=%s file=%s gen=%llu",
-           target.c_str(), video_path.c_str(),
+      LOGI("RequestCastSessionRestart[%s]: coalesced target=%s file=%s gen=%llu",
+           reason ? reason : "unknown", target.c_str(), video_path.c_str(),
            static_cast<unsigned long long>(
                state.connection.desired_session_generation));
       return;
@@ -323,7 +325,8 @@ void RequestCastSessionRestart(ControllerState& state) {
     state.connection.session_restart_posted = true;
   }
 
-  state.task_runner->PostTask([&state]() {
+  const std::string restart_reason = reason ? reason : "unknown";
+  state.task_runner->PostTask([&state, restart_reason]() {
     while (true) {
       std::string current_target;
       std::string current_video_path;
@@ -335,8 +338,9 @@ void RequestCastSessionRestart(ControllerState& state) {
         generation = state.connection.desired_session_generation;
       }
 
-      LOGI("RequestCastSessionRestart: applying target=%s file=%s gen=%llu",
-           current_target.c_str(), current_video_path.c_str(),
+      LOGI("RequestCastSessionRestart[%s]: applying target=%s file=%s gen=%llu",
+           restart_reason.c_str(), current_target.c_str(),
+           current_video_path.c_str(),
            static_cast<unsigned long long>(generation));
       auto endpoint = ParseTarget(current_target);
       if (!endpoint.port) {
@@ -359,7 +363,8 @@ void RequestCastSessionRestart(ControllerState& state) {
       if (!needs_another_pass) {
         return;
       }
-      LOGI("RequestCastSessionRestart: detected newer desired session, retrying");
+      LOGI("RequestCastSessionRestart[%s]: detected newer desired session, retrying",
+           restart_reason.c_str());
     }
   });
 }
@@ -464,7 +469,7 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeTestCast(
 
 #ifdef HAVE_OPENSCREEN
   EnsureTaskRunner(state);
-  RequestCastSessionRestart(state);
+  RequestCastSessionRestart(state, "nativeTestCast");
 #endif
 }
 
@@ -488,7 +493,7 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeConnect(
 #ifdef HAVE_OPENSCREEN
   if (!target_str.empty() && !video_path.empty()) {
     EnsureTaskRunner(state);
-    RequestCastSessionRestart(state);
+    RequestCastSessionRestart(state, "nativeConnect");
   } else {
     std::lock_guard<std::mutex> lock(state.mutex);
     state.connection.connected = !target_str.empty();
@@ -583,7 +588,7 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeOpenVideo(
 #ifdef HAVE_OPENSCREEN
   if (!target_str.empty() && !video_path.empty()) {
     EnsureTaskRunner(state);
-    RequestCastSessionRestart(state);
+    RequestCastSessionRestart(state, "nativeOpenVideo");
   }
 #endif
 
@@ -623,7 +628,7 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeOpenVideoPath(
 #ifdef HAVE_OPENSCREEN
   if (!target_str.empty() && !video_path.empty()) {
     EnsureTaskRunner(state);
-    RequestCastSessionRestart(state);
+    RequestCastSessionRestart(state, "nativeOpenVideoPath");
   }
 #endif
 

@@ -743,6 +743,10 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
 
     fun openSelectedVideoOnCast(uri: Uri, startPlaying: Boolean, startPositionMs: Long = 0L) {
         if (connectedDevice == null || connectionState != Connection.State.CONNECTED) return
+        android.util.Log.i(
+            "ControlCast",
+            "openSelectedVideoOnCast uri=$uri startPlaying=$startPlaying startPositionMs=$startPositionMs castOpenedUri=$castOpenedUri connectionState=$connectionState",
+        )
         connection.openVideo(
             context,
             uri,
@@ -928,6 +932,10 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
 
     LaunchedEffect(connectionState) {
         if (connectionState == Connection.State.DISCONNECTED) {
+            android.util.Log.i(
+                "ControlCast",
+                "connectionState DISCONNECTED: clearing castOpenedUri old=$castOpenedUri selectedUri=$selectedUri isPlaying=$isPlaying",
+            )
             castOpenedUri = null
             val currentUri = selectedUri?.toString()
             if (isPlaying && currentUri != null) {
@@ -991,6 +999,10 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 val uriString = uri.toString()
                 val shouldResumeAfterReconnect =
                     reconnectResumeArmed && reconnectResumeUri == uriString
+                android.util.Log.i(
+                    "ControlCast",
+                    "connected effect uri=$uriString castOpenedUri=$castOpenedUri shouldResumeAfterReconnect=$shouldResumeAfterReconnect exoPlaying=${exoPlayer.isPlaying} reconnectResumeArmed=$reconnectResumeArmed",
+                )
                 if (castOpenedUri != uriString) {
                     openSelectedVideoOnCast(
                         uri,
