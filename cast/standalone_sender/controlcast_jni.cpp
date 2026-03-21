@@ -14,6 +14,7 @@
 #include <sstream>
 #include <string>
 #include <thread>
+#include <chrono>
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "ControlCast", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "ControlCast", __VA_ARGS__)
@@ -35,6 +36,9 @@ namespace {
 constexpr auto kInitialReconnectDelay = std::chrono::milliseconds(200);
 constexpr auto kMaxReconnectDelay = std::chrono::seconds(5);
 constexpr size_t kPausedSeekQueueCapacity = 1;
+constexpr auto kRapidSeekGap = std::chrono::milliseconds(350);
+constexpr auto kSeekStormRestartCooldown = std::chrono::milliseconds(1200);
+constexpr int kSeekStormThreshold = 5;
 
 struct ConnectionState {
   std::string target;
@@ -48,6 +52,9 @@ struct ConnectionState {
   uint64_t cast_generation = 0;
   bool reconnect_enabled = false;
   std::chrono::milliseconds reconnect_delay = kInitialReconnectDelay;
+  int rapid_seek_count = 0;
+  std::chrono::steady_clock::time_point last_seek_at{};
+  std::chrono::steady_clock::time_point last_seek_restart_at{};
   std::deque<long long> paused_seek_queue;
   bool paused_seek_drain_posted = false;
 #endif
@@ -59,6 +66,7 @@ struct ControllerState {
   std::string video_uri;
   bool mirror_locally = true;
   bool playing = false;
+  bool desired_playing = false;
   long long position_ms = 0;
   float zoom = 1.0f;
   float offset_x = 0.0f;
@@ -189,7 +197,7 @@ void StartCastSessionOnTaskRunner(ControllerState& state,
   {
     std::lock_guard<std::mutex> lock(state.mutex);
     position_ms = state.position_ms;
-    playing = state.playing;
+    playing = state.desired_playing;
     zoom = state.zoom;
     offset_x = state.offset_x;
     offset_y = state.offset_y;
@@ -523,6 +531,7 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeDisconnect(
       state.active_mode = "idle";
       state.debug_state.clear();
       state.playing = false;
+      state.desired_playing = false;
   state.connection.reconnect_enabled = false;
   state.connection.reconnect_delay = kInitialReconnectDelay;
   UpdateStatusLocked(state);
@@ -566,8 +575,9 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeOpenVideo(
     target_str = state.connection.target;
     video_path = state.video_path;
     state.playing = start_playing == JNI_TRUE;
+    state.desired_playing = start_playing == JNI_TRUE;
     LOGI("nativeOpenVideo: start_pos=%lld start_playing=%d",
-         state.position_ms, state.playing ? 1 : 0);
+         state.position_ms, state.desired_playing ? 1 : 0);
   }
 
 #ifdef HAVE_OPENSCREEN
@@ -604,9 +614,10 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeOpenVideoPath(
     target_str = state.connection.target;
     video_path = state.video_path;
     state.playing = start_playing == JNI_TRUE;
+    state.desired_playing = start_playing == JNI_TRUE;
     LOGI("nativeOpenVideoPath: path=%s target=%s start_pos=%lld start_playing=%d",
          video_path.c_str(), target_str.c_str(), state.position_ms,
-         state.playing ? 1 : 0);
+         state.desired_playing ? 1 : 0);
   }
 
 #ifdef HAVE_OPENSCREEN
@@ -648,6 +659,7 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativePlay(
 #endif
   std::lock_guard<std::mutex> lock(state.mutex);
   state.playing = state.connection.connected && !state.video_uri.empty();
+  state.desired_playing = state.connection.connected && !state.video_uri.empty();
   UpdateStatusLocked(state);
 }
 
@@ -674,6 +686,7 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativePause(
 #endif
   std::lock_guard<std::mutex> lock(state.mutex);
   state.playing = false;
+  state.desired_playing = false;
   UpdateStatusLocked(state);
 }
 
@@ -684,6 +697,7 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeSeekTo(
     jlong position_ms) {
   auto& state = State();
   long long pos = std::max<long long>(0, position_ms);
+  bool should_restart_session = false;
   LOGI("nativeSeekTo request: pos=%lld connected=%d playing=%d state_pos=%lld",
        pos, state.connection.connected, state.playing, state.position_ms);
 #ifdef HAVE_OPENSCREEN
@@ -692,6 +706,31 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeSeekTo(
     {
       std::lock_guard<std::mutex> lock(state.mutex);
       queue_paused_seek = !state.playing;
+      const auto now = std::chrono::steady_clock::now();
+      if (state.connection.rapid_seek_count > 0 &&
+          now - state.connection.last_seek_at <= kRapidSeekGap) {
+        ++state.connection.rapid_seek_count;
+      } else {
+        state.connection.rapid_seek_count = 1;
+      }
+      state.connection.last_seek_at = now;
+      should_restart_session =
+          state.connection.rapid_seek_count >= kSeekStormThreshold &&
+          !state.connection.target.empty() &&
+          !state.video_path.empty() &&
+          (state.connection.last_seek_restart_at.time_since_epoch().count() ==
+               0 ||
+           now - state.connection.last_seek_restart_at >=
+               kSeekStormRestartCooldown);
+      if (should_restart_session) {
+        state.connection.last_seek_restart_at = now;
+        state.connection.rapid_seek_count = 0;
+        state.connection.paused_seek_queue.clear();
+        state.connection.paused_seek_drain_posted = false;
+        state.desired_playing = true;
+        state.playing = true;
+        LOGI("nativeSeekTo storm: forcing session restart at pos=%lld", pos);
+      }
       if (queue_paused_seek) {
         if (state.connection.paused_seek_queue.size() >=
             kPausedSeekQueueCapacity) {
@@ -710,7 +749,9 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeSeekTo(
         }
       }
     }
-    if (!queue_paused_seek) {
+    if (should_restart_session) {
+      RequestCastSessionRestart(state);
+    } else if (!queue_paused_seek) {
       state.task_runner->PostTask([&state, pos]() {
         if (state.connection.cast) {
           LOGI("nativeSeekTo exec: target=%lld agent_pos_before=%lld",
