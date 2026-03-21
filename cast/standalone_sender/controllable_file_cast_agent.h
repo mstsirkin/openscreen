@@ -87,6 +87,7 @@ class ControllableFileCastAgent final
 
   const char* GetStreamingAppId() const;
   void HandleReceiverStatus(const Json::Value& status);
+  void HandleMediaStatus(const Json::Value& status);
   void OnRemoteMessagingOpened(bool success);
   void OnReceiverMessagingOpened(bool success);
   void CreateAndStartSession();
@@ -117,6 +118,11 @@ class ControllableFileCastAgent final
   VideoViewport desired_viewport_;
   bool has_launched_ = false;
   bool shutting_down_ = false;
+  std::string last_receiver_player_state_;
+  std::string last_receiver_idle_reason_;
+  std::string last_receiver_media_session_id_;
+  double last_receiver_current_time_seconds_ = -1.0;
+  Clock::time_point last_receiver_media_status_at_{};
 };
 
 }  // namespace openscreen::cast

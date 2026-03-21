@@ -19,6 +19,11 @@ namespace openscreen::cast {
 
 namespace {
 using DeviceMediaPolicy = SenderSocketFactory::DeviceMediaPolicy;
+constexpr char kJsonKeyStatus[] = "status";
+constexpr char kJsonKeyPlayerState[] = "playerState";
+constexpr char kJsonKeyIdleReason[] = "idleReason";
+constexpr char kJsonKeyMediaSessionId[] = "mediaSessionId";
+constexpr char kJsonKeyCurrentTime[] = "currentTime";
 }  // namespace
 
 ControllableFileCastAgent::ControllableFileCastAgent(
@@ -135,7 +140,24 @@ std::string ControllableFileCastAgent::GetActiveModeString() const {
 
 std::string ControllableFileCastAgent::GetDebugStateString() const {
   if (sender_) {
-    return sender_->GetDebugStateString();
+    std::ostringstream stream;
+    stream << sender_->GetDebugStateString();
+    if (last_receiver_current_time_seconds_ >= 0.0 ||
+        !last_receiver_player_state_.empty() ||
+        !last_receiver_idle_reason_.empty() ||
+        !last_receiver_media_session_id_.empty()) {
+      // Receiver MEDIA_STATUS should become the sync source once validated.
+      stream << " recv_time_s=" << last_receiver_current_time_seconds_
+             << " recv_state=" << last_receiver_player_state_
+             << " recv_idle=" << last_receiver_idle_reason_
+             << " recv_session=" << last_receiver_media_session_id_;
+      if (last_receiver_media_status_at_ != Clock::time_point{}) {
+        stream << " recv_status_age_ms="
+               << to_milliseconds(Clock::now() - last_receiver_media_status_at_)
+                      .count();
+      }
+    }
+    return stream.str();
   }
   return {};
 }
@@ -215,6 +237,15 @@ void ControllableFileCastAgent::OnMessage(VirtualConnectionRouter* router,
     } else if (HasType(payload.value(), CastMessageType::kLaunchError)) {
       Shutdown("launch_error");
     }
+  } else if (message.namespace_() == kMediaNamespace &&
+             message_port_.GetSocketId() == ToCastSocketId(socket)) {
+    const ErrorOr<Json::Value> payload = json::Parse(GetPayload(message));
+    if (payload.is_error()) {
+      return;
+    }
+    if (HasType(payload.value(), CastMessageType::kMediaStatus)) {
+      HandleMediaStatus(payload.value());
+    }
   }
 }
 
@@ -289,6 +320,26 @@ void ControllableFileCastAgent::HandleReceiverStatus(const Json::Value& status) 
   connection_handler_.OpenRemoteConnection(
       *remote_connection_,
       [this](bool success) { OnRemoteMessagingOpened(success); });
+}
+
+void ControllableFileCastAgent::HandleMediaStatus(const Json::Value& status) {
+  const Json::Value& details =
+      status[kJsonKeyStatus].isArray() && !status[kJsonKeyStatus].empty()
+          ? status[kJsonKeyStatus][0]
+          : Json::Value();
+  if (!details.isObject()) {
+    return;
+  }
+
+  json::TryParseString(details[kJsonKeyPlayerState],
+                       &last_receiver_player_state_);
+  json::TryParseString(details[kJsonKeyIdleReason],
+                       &last_receiver_idle_reason_);
+  json::TryParseString(details[kJsonKeyMediaSessionId],
+                       &last_receiver_media_session_id_);
+  json::TryParseDouble(details[kJsonKeyCurrentTime],
+                       &last_receiver_current_time_seconds_);
+  last_receiver_media_status_at_ = Clock::now();
 }
 
 void ControllableFileCastAgent::OnRemoteMessagingOpened(bool success) {
