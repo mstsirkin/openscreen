@@ -131,6 +131,10 @@ StreamingMediaCodecEncoder::StreamingMediaCodecEncoder(
 }
 
 StreamingMediaCodecEncoder::~StreamingMediaCodecEncoder() {
+  if (alive_) {
+    *alive_ = false;
+    alive_.reset();
+  }
   running_ = false;
   if (output_thread_.joinable()) {
     output_thread_.join();
@@ -140,6 +144,31 @@ StreamingMediaCodecEncoder::~StreamingMediaCodecEncoder() {
     AMediaCodec_stop(codec_);
     AMediaCodec_delete(codec_);
   }
+}
+
+std::unique_ptr<Sender> StreamingMediaCodecEncoder::ReleaseSender() {
+  if (alive_) {
+    *alive_ = false;
+    alive_.reset();
+  }
+  running_ = false;
+  if (output_thread_.joinable()) {
+    output_thread_.join();
+  }
+  DestroyGlResources();
+  if (codec_) {
+    AMediaCodec_stop(codec_);
+    AMediaCodec_delete(codec_);
+    codec_ = nullptr;
+  }
+  pending_meta_.clear();
+  configured_width_ = 0;
+  configured_height_ = 0;
+  use_surface_input_ = false;
+  start_time_ = Clock::time_point::min();
+  last_enqueued_rtp_timestamp_ = RtpTimeTicks();
+  last_output_rtp_timestamp_ = RtpTimeTicks();
+  return TakeSender();
 }
 
 int StreamingMediaCodecEncoder::GetTargetBitrate() const {

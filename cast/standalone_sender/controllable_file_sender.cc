@@ -225,6 +225,10 @@ void ControllableFileSender::ControlForNetworkCongestion() {
 void ControllableFileSender::StartPlaybackAt(Clock::duration position,
                                              bool allow_passthrough) {
   StopCapturers();
+  if (allow_passthrough && can_passthrough_video_ && IsViewportIdentity() &&
+      !video_sender_ && video_encoder_) {
+    ReclaimVideoSenderFromEncoder();
+  }
   start_position_ = ClampPosition(position);
   last_known_position_ = start_position_;
   if (media_duration_ > Clock::duration::zero() &&
@@ -341,7 +345,7 @@ bool ControllableFileSender::CanUseVideoPassthrough() {
 bool ControllableFileSender::CanStartVideoPassthroughAt(
     Clock::duration position) const {
   return settings_.should_include_video && can_passthrough_video_ &&
-         video_sender_ && !video_encoder_ &&
+         (video_sender_ || video_encoder_) &&
          IsViewportIdentity() &&
          (media_duration_ <= Clock::duration::zero() || position < media_duration_);
 }
@@ -358,6 +362,17 @@ void ControllableFileSender::EnsureVideoEncoderCreated() {
   video_encoder_ = CreateVideoEncoder(
       StreamingVideoEncoder::Parameters{.codec = settings_.codec},
       env_.task_runner(), std::move(video_sender_));
+}
+
+void ControllableFileSender::ReclaimVideoSenderFromEncoder() {
+  if (!video_encoder_) {
+    return;
+  }
+  video_sender_ = video_encoder_->ReleaseSender();
+  video_encoder_.reset();
+  if (video_sender_) {
+    video_sender_->SetObserver(this);
+  }
 }
 
 void ControllableFileSender::FallbackToTranscode(const char* reason,
@@ -387,7 +402,7 @@ void ControllableFileSender::FallbackToTranscode(const char* reason,
 void ControllableFileSender::StartPassthroughReentryProbe(
     Clock::duration position) {
   if (!can_passthrough_video_ || !IsViewportIdentity() || !is_playing_ ||
-      video_encoder_ || !video_sender_) {
+      (!video_encoder_ && !video_sender_)) {
     video_passthrough_probe_capturer_.reset();
     passthrough_reentry_pending_ = false;
     return;

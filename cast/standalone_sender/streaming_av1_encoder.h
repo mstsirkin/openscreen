@@ -66,6 +66,7 @@ class StreamingAv1Encoder : public StreamingVideoEncoder {
   void EncodeAndSend(const VideoFrame& frame,
                      Clock::time_point reference_time,
                      std::function<void(Stats)> stats_callback) override;
+  std::unique_ptr<Sender> ReleaseSender() override;
 
  private:
   // Syntactic convenience to wrap the aom_image_t alloc/free API in a smart
@@ -163,6 +164,9 @@ class StreamingAv1Encoder : public StreamingVideoEncoder {
 
   // libaom AV1 encoder instance. Only the encode thread accesses this.
   aom_codec_ctx_t encoder_;
+
+  // Shared flag used to detect when the encoder has been destroyed.
+  std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
 };
 
 }  // namespace cast

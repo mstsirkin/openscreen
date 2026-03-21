@@ -66,6 +66,7 @@ class StreamingVpxEncoder : public StreamingVideoEncoder {
   void EncodeAndSend(const VideoFrame& frame,
                      Clock::time_point reference_time,
                      std::function<void(Stats)> stats_callback) override;
+  std::unique_ptr<Sender> ReleaseSender() override;
 
  private:
   // Syntactic convenience to wrap the vpx_image_t alloc/free API in a smart

@@ -162,6 +162,10 @@ class StreamingVideoEncoder {
                              Clock::time_point reference_time,
                              std::function<void(Stats)> stats_callback) = 0;
 
+  // Quiesces the encoder and returns ownership of the negotiated Sender so
+  // another producer path can continue using the same stream/session.
+  virtual std::unique_ptr<Sender> ReleaseSender() = 0;
+
   static constexpr int kMinQuantizer = 0;
   static constexpr int kMaxQuantizer = 63;
 
@@ -169,6 +173,7 @@ class StreamingVideoEncoder {
   StreamingVideoEncoder(const Parameters& params,
                         TaskRunner& task_runner,
                         std::unique_ptr<Sender> sender);
+  std::unique_ptr<Sender> TakeSender() { return std::move(sender_); }
 
   // This is the equivalent change in encoding speed per one quantizer step.
   static constexpr double kEquivalentEncodingSpeedStepPerQuantizerStep =

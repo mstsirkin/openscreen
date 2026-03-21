@@ -95,12 +95,35 @@ StreamingVpxEncoder::StreamingVpxEncoder(const Parameters& params,
 }
 
 StreamingVpxEncoder::~StreamingVpxEncoder() {
+  if (alive_) {
+    *alive_ = false;
+    alive_.reset();
+  }
   {
     std::unique_lock<std::mutex> lock(mutex_);
     target_bitrate_ = 0;
     cv_.notify_one();
   }
   encode_thread_.join();
+}
+
+std::unique_ptr<Sender> StreamingVpxEncoder::ReleaseSender() {
+  if (alive_) {
+    *alive_ = false;
+    alive_.reset();
+  }
+  {
+    std::unique_lock<std::mutex> lock(mutex_);
+    target_bitrate_ = 0;
+    while (!encode_queue_.empty()) {
+      encode_queue_.pop();
+    }
+    cv_.notify_one();
+  }
+  if (encode_thread_.joinable()) {
+    encode_thread_.join();
+  }
+  return TakeSender();
 }
 
 int StreamingVpxEncoder::GetTargetBitrate() const {

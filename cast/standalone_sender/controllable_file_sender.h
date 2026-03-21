@@ -75,6 +75,7 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
   bool CanStartVideoPassthroughAt(Clock::duration position) const;
   bool IsViewportIdentity() const;
   void EnsureVideoEncoderCreated();
+  void ReclaimVideoSenderFromEncoder();
   void FallbackToTranscode(const char* reason,
                            Clock::duration position,
                            bool resume_playback,

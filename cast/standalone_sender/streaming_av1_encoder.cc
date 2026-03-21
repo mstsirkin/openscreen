@@ -84,12 +84,35 @@ StreamingAv1Encoder::StreamingAv1Encoder(const Parameters& params,
 }
 
 StreamingAv1Encoder::~StreamingAv1Encoder() {
+  if (alive_) {
+    *alive_ = false;
+    alive_.reset();
+  }
   {
     std::unique_lock<std::mutex> lock(mutex_);
     target_bitrate_ = 0;
     cv_.notify_one();
   }
   encode_thread_.join();
+}
+
+std::unique_ptr<Sender> StreamingAv1Encoder::ReleaseSender() {
+  if (alive_) {
+    *alive_ = false;
+    alive_.reset();
+  }
+  {
+    std::unique_lock<std::mutex> lock(mutex_);
+    target_bitrate_ = 0;
+    while (!encode_queue_.empty()) {
+      encode_queue_.pop();
+    }
+    cv_.notify_one();
+  }
+  if (encode_thread_.joinable()) {
+    encode_thread_.join();
+  }
+  return TakeSender();
 }
 
 int StreamingAv1Encoder::GetTargetBitrate() const {
@@ -228,8 +251,10 @@ void StreamingAv1Encoder::ProcessWorkUnitsUntilTimeToQuit() {
                             work_unit);
     UpdateSpeedSettingForNextFrame(work_unit.stats);
 
+    std::weak_ptr<bool> weak_alive = alive_;
     main_task_runner_.PostTask(
-        [this, results = std::move(work_unit)]() mutable {
+        [this, weak_alive, results = std::move(work_unit)]() mutable {
+          if (weak_alive.expired()) return;
           SendEncodedFrame(std::move(results));
         });
   }
