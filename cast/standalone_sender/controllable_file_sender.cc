@@ -386,7 +386,8 @@ void ControllableFileSender::FallbackToTranscode(const char* reason,
 
 void ControllableFileSender::StartPassthroughReentryProbe(
     Clock::duration position) {
-  if (!can_passthrough_video_ || !IsViewportIdentity() || !is_playing_) {
+  if (!can_passthrough_video_ || !IsViewportIdentity() || !is_playing_ ||
+      video_encoder_ || !video_sender_) {
     video_passthrough_probe_capturer_.reset();
     passthrough_reentry_pending_ = false;
     return;
