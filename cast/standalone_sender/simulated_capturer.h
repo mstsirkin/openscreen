@@ -270,6 +270,7 @@ class SimulatedVideoPassthroughCapturer final {
                                     const char* path,
                                     Clock::time_point start_time,
                                     Clock::duration start_media_time,
+                                    bool allow_preroll_keyframe,
                                     Client& client);
   ~SimulatedVideoPassthroughCapturer();
 
@@ -290,6 +291,9 @@ class SimulatedVideoPassthroughCapturer final {
   ClockNowFunctionPtr now_;
   Clock::time_point start_time_;
   Clock::duration start_media_time_;
+  bool allow_preroll_keyframe_ = false;
+  bool preroll_keyframe_consumed_ = false;
+  int ignored_invalid_packets_ = 0;
   Client& client_;
   const AVPacketUniquePtr packet_;
   int stream_index_ = -1;

@@ -633,11 +633,13 @@ SimulatedVideoPassthroughCapturer::SimulatedVideoPassthroughCapturer(
     const char* path,
     Clock::time_point start_time,
     Clock::duration start_media_time,
+    bool allow_preroll_keyframe,
     Client& client)
     : format_context_(MakeUniqueAVFormatContext(path)),
       now_(environment.now_function()),
       start_time_(start_time),
       start_media_time_(std::max(start_media_time, Clock::duration::zero())),
+      allow_preroll_keyframe_(allow_preroll_keyframe),
       client_(client),
       packet_(MakeUniqueAVPacket()),
       next_task_(environment.now_function(), environment.task_runner()) {
@@ -702,6 +704,8 @@ void SimulatedVideoPassthroughCapturer::SeekTo(
                 AVSEEK_FLAG_BACKWARD);
   start_time_ = new_start_time;
   start_media_time_ = media_time;
+  preroll_keyframe_consumed_ = false;
+  ignored_invalid_packets_ = 0;
   last_packet_timestamp_.reset();
   filtered_packet_storage_.clear();
   next_task_.Schedule([this] { StartReadingNextPacket(); }, Alarm::kImmediately);
@@ -741,11 +745,6 @@ void SimulatedVideoPassthroughCapturer::DeliverCurrentPacket() {
       packet_->pts != AV_NOPTS_VALUE ? packet_->pts : packet_->dts;
   const Clock::duration packet_timestamp =
       ToApproximateClockDuration(best_timestamp, time_base);
-  if (packet_timestamp < start_media_time_) {
-    av_packet_unref(packet_.get());
-    next_task_.Schedule([this] { StartReadingNextPacket(); }, Alarm::kImmediately);
-    return;
-  }
 
   Clock::duration packet_duration = Clock::duration::zero();
   if (packet_->duration > 0) {
@@ -759,8 +758,25 @@ void SimulatedVideoPassthroughCapturer::DeliverCurrentPacket() {
   last_packet_timestamp_ = packet_timestamp;
 
   const bool is_key_frame = (packet_->flags & AV_PKT_FLAG_KEY) != 0;
+  const bool use_preroll_keyframe =
+      allow_preroll_keyframe_ && !preroll_keyframe_consumed_ && is_key_frame &&
+      packet_timestamp < start_media_time_;
+  if (packet_timestamp < start_media_time_ && !use_preroll_keyframe) {
+    av_packet_unref(packet_.get());
+    next_task_.Schedule([this] { StartReadingNextPacket(); }, Alarm::kImmediately);
+    return;
+  }
+  if (use_preroll_keyframe) {
+    preroll_keyframe_consumed_ = true;
+  }
   if (!ConvertPacketToAnnexB(*packet_, is_key_frame)) {
     av_packet_unref(packet_.get());
+    if (allow_preroll_keyframe_ && ignored_invalid_packets_ < 32) {
+      ++ignored_invalid_packets_;
+      next_task_.Schedule([this] { StartReadingNextPacket(); },
+                          Alarm::kImmediately);
+      return;
+    }
     OnError("ConvertPacketToAnnexB", AVERROR_INVALIDDATA);
     return;
   }

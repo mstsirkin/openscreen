@@ -31,6 +31,7 @@ int RoundToEven(int value) {
 }
 
 constexpr auto kPausedKeepaliveInterval = std::chrono::seconds(4);
+constexpr auto kMaxPassthroughReentryPreroll = std::chrono::milliseconds(1500);
 
 constexpr char kDirectVideoMode[] = "direct-h264-video passthrough";
 constexpr char kDirectVideoArmedMode[] = "direct-h264-video passthrough (armed)";
@@ -245,6 +246,7 @@ void ControllableFileSender::StartPlaybackAt(Clock::duration position,
   if (allow_passthrough && CanStartVideoPassthroughAt(start_position_)) {
     video_passthrough_capturer_.emplace(env_, settings_.path_to_file.c_str(),
                                         playback_start_time_, start_position_,
+                                        false,
                                         *this);
     passthrough_active_ = true;
     active_mode_ = kDirectVideoMode;
@@ -391,7 +393,7 @@ void ControllableFileSender::StartPassthroughReentryProbe(
   }
   video_passthrough_probe_capturer_.emplace(
       env_, settings_.path_to_file.c_str(), playback_start_time_,
-      ClampPosition(position), *this);
+      ClampPosition(position), true, *this);
   passthrough_reentry_pending_ = true;
   OSP_LOG_INFO << "Passthrough re-entry probe armed at "
                << to_milliseconds(ClampPosition(position)).count() << "ms";
@@ -522,7 +524,14 @@ void ControllableFileSender::OnVideoPacket(
     Clock::time_point capture_end_time,
     Clock::time_point reference_time) {
   if (passthrough_reentry_pending_ && !passthrough_active_) {
-    if (is_key_frame) {
+    const auto preroll = start_position_ > media_timestamp
+                             ? start_position_ - media_timestamp
+                             : Clock::duration::zero();
+    const bool acceptable_reentry =
+        is_key_frame &&
+        (media_timestamp >= start_position_ ||
+         preroll <= kMaxPassthroughReentryPreroll);
+    if (acceptable_reentry) {
       OSP_LOG_INFO << "Passthrough re-entry at "
                    << to_milliseconds(media_timestamp).count() << "ms";
       StartPlaybackAt(media_timestamp);
