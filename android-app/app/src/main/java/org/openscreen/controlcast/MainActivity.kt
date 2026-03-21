@@ -904,14 +904,18 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         startPlaying: Boolean,
         startPositionMs: Long,
     ) {
-        reconnectResumeArmed = false
+        reconnectResumeArmed =
+            startPlaying && connectionState != Connection.State.CONNECTED
         reconnectResumeUri = uri.toString()
         selectedUri = uri
         val mediaItem = MediaItem.fromUri(uri)
         exoPlayer.setMediaItem(mediaItem)
         exoPlayer.prepare()
         exoPlayer.seekTo(startPositionMs.coerceAtLeast(0L))
-        if (localMirrorEnabled && startPlaying) {
+        if (localMirrorEnabled &&
+            startPlaying &&
+            connectionState == Connection.State.DISCONNECTED
+        ) {
             exoPlayer.play()
         } else {
             exoPlayer.pause()
@@ -994,18 +998,22 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     // Auto-load video shared from Gallery or other apps
     LaunchedEffect(sharedUri) {
         if (sharedUri != null) {
-            reconnectResumeArmed = false
-            reconnectResumeUri = sharedUri.toString()
             val shouldStartPlaying = if (connectionState == Connection.State.CONNECTED) {
                 isPlaying
             } else {
                 localMirrorEnabled
             }
+            reconnectResumeArmed =
+                shouldStartPlaying && connectionState != Connection.State.CONNECTED
+            reconnectResumeUri = sharedUri.toString()
             selectedUri = sharedUri
             val mediaItem = MediaItem.fromUri(sharedUri)
             exoPlayer.setMediaItem(mediaItem)
             exoPlayer.prepare()
-            if (localMirrorEnabled && shouldStartPlaying) {
+            if (localMirrorEnabled &&
+                shouldStartPlaying &&
+                connectionState == Connection.State.DISCONNECTED
+            ) {
                 exoPlayer.play()
             } else {
                 exoPlayer.pause()
@@ -1182,13 +1190,14 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
 
     val openVideoLauncher = rememberLauncherForActivityResult(OpenDocument()) { uri ->
         if (uri != null) {
-            reconnectResumeArmed = false
-            reconnectResumeUri = uri.toString()
             val shouldStartPlaying = if (connectionState == Connection.State.CONNECTED) {
                 isPlaying
             } else {
                 localMirrorEnabled
             }
+            reconnectResumeArmed =
+                shouldStartPlaying && connectionState != Connection.State.CONNECTED
+            reconnectResumeUri = uri.toString()
             context.contentResolver.takePersistableUriPermission(
                 uri,
                 android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
@@ -1197,7 +1206,10 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             val mediaItem = MediaItem.fromUri(uri)
             exoPlayer.setMediaItem(mediaItem)
             exoPlayer.prepare()
-            if (localMirrorEnabled && shouldStartPlaying) {
+            if (localMirrorEnabled &&
+                shouldStartPlaying &&
+                connectionState == Connection.State.DISCONNECTED
+            ) {
                 exoPlayer.play()
             } else {
                 exoPlayer.pause()
