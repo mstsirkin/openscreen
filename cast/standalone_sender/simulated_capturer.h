@@ -252,7 +252,7 @@ class SimulatedVideoPassthroughCapturer final {
     virtual void OnEndOfFile(SimulatedVideoPassthroughCapturer* capturer) = 0;
     virtual void OnError(SimulatedVideoPassthroughCapturer* capturer,
                          const std::string& message) = 0;
-    virtual void OnVideoPacket(ByteView data,
+    virtual void OnVideoPacket(std::vector<uint8_t> data,
                                bool is_key_frame,
                                Clock::duration media_timestamp,
                                Clock::duration media_duration,

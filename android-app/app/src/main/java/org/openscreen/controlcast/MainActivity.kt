@@ -519,7 +519,7 @@ class Connection(private val backend: NativeBackedBackend) {
     private fun startMonitoring() {
         monitorJob?.cancel()
         monitorJob = scope.launch {
-            while (isActive && state != State.DISCONNECTED) {
+            while (isActive) {
                 delay(500)
                 backend.syncStatus()
                 val connected =
@@ -533,6 +533,7 @@ class Connection(private val backend: NativeBackedBackend) {
                     state = State.CONNECTING
                     continue
                 }
+                state = State.DISCONNECTED
             }
         }
     }

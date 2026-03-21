@@ -767,13 +767,13 @@ void SimulatedVideoPassthroughCapturer::DeliverCurrentPacket() {
   av_packet_unref(packet_.get());
 
   const auto reference_time = start_time_ + (packet_timestamp - start_media_time_);
+  auto packet_data = std::move(filtered_packet_storage_);
   next_task_.Schedule(
-      [this, reference_time, packet_timestamp, packet_duration, is_key_frame] {
+      [this, reference_time, packet_timestamp, packet_duration, is_key_frame,
+       packet_data = std::move(packet_data)]() mutable {
         client_.OnVideoPacket(
-            ByteView(filtered_packet_storage_.data(),
-                     filtered_packet_storage_.size()),
-            is_key_frame,
-            packet_timestamp, packet_duration, capture_begin_time_,
+            std::move(packet_data), is_key_frame, packet_timestamp,
+            packet_duration, capture_begin_time_,
             capture_begin_time_ + std::chrono::milliseconds(1),
             reference_time);
       },

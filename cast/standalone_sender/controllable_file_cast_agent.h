@@ -37,7 +37,7 @@ class ControllableFileCastAgent final
       public SenderSession::Client,
       public SenderStatsClient {
  public:
-  using ShutdownCallback = std::function<void()>;
+  using ShutdownCallback = std::function<void(const std::string&)>;
 
   ControllableFileCastAgent(TaskRunner& task_runner,
                             std::unique_ptr<TrustStore> cast_trust_store,
@@ -90,7 +90,7 @@ class ControllableFileCastAgent final
   void OnReceiverMessagingOpened(bool success);
   void CreateAndStartSession();
   void StartSender();
-  void Shutdown();
+  void Shutdown(const std::string& reason = "shutdown");
 
   TaskRunner& task_runner_;
   ShutdownCallback shutdown_callback_;

@@ -15,7 +15,7 @@
 #include <atomic>
 #include <memory>
 #include <mutex>
-#include <queue>
+#include <deque>
 #include <thread>
 
 #include "cast/standalone_sender/streaming_video_encoder.h"
@@ -73,7 +73,8 @@ class StreamingMediaCodecEncoder : public StreamingVideoEncoder {
     RtpTimeTicks rtp_timestamp;
   };
   std::mutex meta_mutex_;
-  std::queue<FrameMeta> pending_meta_;
+  std::deque<FrameMeta> pending_meta_;
+  RtpTimeTicks last_output_rtp_timestamp_;
 
   // SPS/PPS codec config data, prepended to each key frame.
   std::vector<uint8_t> codec_config_;

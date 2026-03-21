@@ -287,8 +287,21 @@ void StreamingMediaCodecEncoder::EncodeAndSend(
   // Compute RTP timestamp.
   RtpTimeTicks rtp_timestamp;
   if (start_time_ == Clock::time_point::min()) {
-    start_time_ = reference_time;
-    rtp_timestamp = RtpTimeTicks();
+    const auto frame_step = RtpTimeDelta::FromDuration(
+        frame.duration > Clock::duration::zero() ? frame.duration
+                                                 : std::chrono::milliseconds(33),
+        sender_->rtp_timebase());
+    if (sender_->GetNextFrameId() == FrameId::first()) {
+      start_time_ = reference_time;
+      rtp_timestamp = RtpTimeTicks();
+      last_enqueued_rtp_timestamp_ = RtpTimeTicks();
+    } else {
+      last_enqueued_rtp_timestamp_ = sender_->GetLastEnqueuedRtpTimestamp();
+      rtp_timestamp = last_enqueued_rtp_timestamp_ + frame_step;
+      start_time_ = reference_time -
+          rtp_timestamp.ToTimeSinceOrigin<Clock::duration>(
+              sender_->rtp_timebase());
+    }
   } else {
     rtp_timestamp = RtpTimeTicks::FromTimeSinceOrigin(
         reference_time - start_time_, sender_->rtp_timebase());
@@ -372,7 +385,7 @@ void StreamingMediaCodecEncoder::EncodeAndSend(
                  .count();
   {
     std::lock_guard<std::mutex> lock(meta_mutex_);
-    pending_meta_.push({pts, reference_time, rtp_timestamp});
+    pending_meta_.push_back({pts, reference_time, rtp_timestamp});
   }
   AMediaCodec_queueInputBuffer(codec_, buf_idx, 0, needed, pts, flags);
 
@@ -613,13 +626,13 @@ bool StreamingMediaCodecEncoder::EncodeAndSendViaSurface(
   }
   {
     std::lock_guard<std::mutex> lock(meta_mutex_);
-    pending_meta_.push({pts, reference_time, rtp_timestamp});
+    pending_meta_.push_back({pts, reference_time, rtp_timestamp});
   }
   if (!eglSwapBuffers(egl_display_, egl_surface_)) {
     LOGE("eglSwapBuffers failed");
     std::lock_guard<std::mutex> lock(meta_mutex_);
     if (!pending_meta_.empty()) {
-      pending_meta_.pop();
+      pending_meta_.pop_front();
     }
     return false;
   }
@@ -666,7 +679,7 @@ void StreamingMediaCodecEncoder::OutputThread() {
             auto& meta = pending_meta_.front();
             ref_time = meta.reference_time;
             rtp_ts = meta.rtp_timestamp;
-            pending_meta_.pop();
+            pending_meta_.pop_front();
           } else {
             // Fallback: reconstruct from PTS.
             ref_time = Clock::time_point(

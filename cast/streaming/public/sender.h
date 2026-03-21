@@ -167,6 +167,10 @@ class Sender final : public SenderPacketRouter::Sender,
   // Clock::duration::zero() if no reports have been received yet.
   Clock::duration GetCurrentRoundTripTime() const;
 
+  // Returns the RTP timestamp of the last accepted frame, or zero if no frame
+  // has been accepted yet.
+  RtpTimeTicks GetLastEnqueuedRtpTimestamp() const;
+
   // Enqueues the given `frame` for sending as soon as possible. Returns OK if
   // the frame is accepted, and some time later Observer::OnFrameCanceled() will
   // be called once it is no longer in-flight.

@@ -71,6 +71,7 @@ struct ControllerState {
   int playout_delay_ms = 400;
   std::string active_mode = "idle";
   std::string status = "Native backend ready.";
+  std::string last_session_end_reason = "none";
 
 #ifdef HAVE_OPENSCREEN
   openscreen::TaskRunnerImpl* task_runner = nullptr;
@@ -110,6 +111,9 @@ void UpdateStatusLocked(ControllerState& state) {
     if (!state.active_mode.empty()) {
       stream << " | mode " << state.active_mode;
     }
+    if (!state.last_session_end_reason.empty()) {
+      stream << " | last end " << state.last_session_end_reason;
+    }
     state.status = stream.str();
     return;
   }
@@ -125,6 +129,9 @@ void UpdateStatusLocked(ControllerState& state) {
     }
   } else {
     stream << " | no video selected";
+  }
+  if (!state.last_session_end_reason.empty()) {
+    stream << " | last end " << state.last_session_end_reason;
   }
 #ifndef HAVE_OPENSCREEN
   stream << " | native Open Screen sender hookup pending";
@@ -198,8 +205,8 @@ void StartCastSessionOnTaskRunner(ControllerState& state,
   state.connection.cast =
       std::make_unique<openscreen::cast::ControllableFileCastAgent>(
           *state.task_runner, std::move(trust_store),
-          [&state, agent_generation]() {
-            LOGI("Agent session ended");
+          [&state, agent_generation](const std::string& reason) {
+            LOGI("Agent session ended: %s", reason.c_str());
             bool should_retry = false;
             std::string target;
             std::string video_path;
@@ -207,6 +214,7 @@ void StartCastSessionOnTaskRunner(ControllerState& state,
             {
               std::lock_guard<std::mutex> lock(state.mutex);
               state.connection.connected = false;
+              state.last_session_end_reason = reason;
               const bool stale_agent =
                   agent_generation != state.connection.cast_generation;
               UpdateStatusLocked(state);

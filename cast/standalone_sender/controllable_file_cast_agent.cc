@@ -2,6 +2,7 @@
 
 #include "cast/standalone_sender/controllable_file_cast_agent.h"
 
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -158,18 +159,22 @@ void ControllableFileCastAgent::OnError(SenderSocketFactory* factory,
                                         const IPEndpoint& endpoint,
                                         const Error& error) {
   OSP_LOG_ERROR << "ControllableFileCastAgent socket factory error: " << error;
-  Shutdown();
+  std::ostringstream stream;
+  stream << "socket_factory_error: " << error;
+  Shutdown(stream.str());
 }
 
 void ControllableFileCastAgent::OnClose(CastSocket* cast_socket) {
   OSP_LOG_INFO << "ControllableFileCastAgent socket closed";
-  Shutdown();
+  Shutdown("socket_closed");
 }
 
 void ControllableFileCastAgent::OnError(CastSocket* socket,
                                         const Error& error) {
   OSP_LOG_ERROR << "ControllableFileCastAgent socket error: " << error;
-  Shutdown();
+  std::ostringstream stream;
+  stream << "socket_error: " << error;
+  Shutdown(stream.str());
 }
 
 bool ControllableFileCastAgent::IsConnectionAllowed(
@@ -201,7 +206,7 @@ void ControllableFileCastAgent::OnMessage(VirtualConnectionRouter* router,
     if (HasType(payload.value(), CastMessageType::kReceiverStatus)) {
       HandleReceiverStatus(payload.value());
     } else if (HasType(payload.value(), CastMessageType::kLaunchError)) {
-      Shutdown();
+      Shutdown("launch_error");
     }
   }
 }
@@ -218,7 +223,9 @@ void ControllableFileCastAgent::OnNegotiated(
 void ControllableFileCastAgent::OnError(const SenderSession* session,
                                         const Error& error) {
   OSP_LOG_ERROR << "ControllableFileCastAgent session error: " << error;
-  Shutdown();
+  std::ostringstream stream;
+  stream << "session_error: " << error;
+  Shutdown(stream.str());
 }
 
 void ControllableFileCastAgent::OnStatisticsUpdated(
@@ -241,7 +248,7 @@ void ControllableFileCastAgent::HandleReceiverStatus(const Json::Value& status) 
   if (!json::TryParseString(details[kMessageKeyAppId], &running_app_id) ||
       running_app_id != GetStreamingAppId()) {
     if (has_launched_) {
-      Shutdown();
+      Shutdown("receiver_status_app_missing");
     }
     return;
   }
@@ -251,7 +258,7 @@ void ControllableFileCastAgent::HandleReceiverStatus(const Json::Value& status) 
   std::string session_id;
   if (!json::TryParseString(details[kMessageKeySessionId], &session_id) ||
       session_id.empty()) {
-    Shutdown();
+    Shutdown("receiver_status_missing_session");
     return;
   }
   if (app_session_id_.empty()) {
@@ -265,7 +272,7 @@ void ControllableFileCastAgent::HandleReceiverStatus(const Json::Value& status) 
   std::string transport_id;
   if (!json::TryParseString(details[kMessageKeyTransportId], &transport_id) ||
       transport_id.empty()) {
-    Shutdown();
+    Shutdown("receiver_status_missing_transport");
     return;
   }
 
@@ -281,13 +288,13 @@ void ControllableFileCastAgent::OnRemoteMessagingOpened(bool success) {
   if (success) {
     CreateAndStartSession();
   } else {
-    Shutdown();
+    Shutdown("remote_messaging_open_failed");
   }
 }
 
 void ControllableFileCastAgent::OnReceiverMessagingOpened(bool success) {
   if (!success) {
-    Shutdown();
+    Shutdown("receiver_messaging_open_failed");
     return;
   }
 
@@ -303,7 +310,7 @@ void ControllableFileCastAgent::OnReceiverMessagingOpened(bool success) {
 
 void ControllableFileCastAgent::CreateAndStartSession() {
   if (!connection_settings_) {
-    Shutdown();
+    Shutdown("missing_connection_settings");
     return;
   }
   // Environment owns one UDP socket, so bind it to the same address family as
@@ -341,7 +348,9 @@ void ControllableFileCastAgent::CreateAndStartSession() {
 
   const Error err = current_session_->Negotiate({audio_config}, {video_config});
   if (!err.ok()) {
-    Shutdown();
+    std::ostringstream stream;
+    stream << "session_negotiate_error: " << err;
+    Shutdown(stream.str());
   }
 }
 
@@ -352,7 +361,8 @@ void ControllableFileCastAgent::StartSender() {
 
   sender_ = std::make_unique<ControllableFileSender>(
       *environment_, connection_settings_.value(), current_session_.get(),
-      std::move(*current_negotiation_), [this]() { shutdown_callback_(); });
+      std::move(*current_negotiation_),
+      [this]() { Shutdown("sender_shutdown"); });
   current_negotiation_.reset();
   sender_->SetViewport(desired_viewport_);
   sender_->SeekTo(desired_position_);
@@ -363,7 +373,7 @@ void ControllableFileCastAgent::StartSender() {
   }
 }
 
-void ControllableFileCastAgent::Shutdown() {
+void ControllableFileCastAgent::Shutdown(const std::string& reason) {
   if (shutting_down_) {
     return;
   }
@@ -403,7 +413,7 @@ void ControllableFileCastAgent::Shutdown() {
 
   if (shutdown_callback_) {
     auto cb = std::move(shutdown_callback_);
-    cb();
+    cb(reason);
   }
 }
 

@@ -76,6 +76,7 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
                            Clock::duration position,
                            bool resume_playback,
                            bool disable_passthrough = false);
+  void StartPassthroughReentryProbe(Clock::duration position);
   void SchedulePausedKeepalive();
   void SendPausedKeepaliveFrame();
   void RetryPendingPassthroughPacket();
@@ -92,7 +93,7 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
                     Clock::time_point capture_begin_time,
                     Clock::time_point capture_end_time,
                     Clock::time_point reference_time) final;
-  void OnVideoPacket(ByteView data,
+  void OnVideoPacket(std::vector<uint8_t> data,
                      bool is_key_frame,
                      Clock::duration media_timestamp,
                      Clock::duration media_duration,
@@ -137,6 +138,8 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
   std::optional<SimulatedAudioCapturer> audio_capturer_;
   std::optional<SimulatedVideoCapturer> video_capturer_;
   std::optional<SimulatedVideoPassthroughCapturer> video_passthrough_capturer_;
+  std::optional<SimulatedVideoPassthroughCapturer>
+      video_passthrough_probe_capturer_;
   int num_capturers_running_ = 0;
 
   Alarm next_task_;
@@ -152,6 +155,7 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
   bool can_passthrough_video_ = false;
   bool passthrough_active_ = false;
   bool passthrough_backpressured_ = false;
+  bool passthrough_reentry_pending_ = false;
   std::string active_mode_;
   struct PendingPassthroughPacket {
     std::vector<uint8_t> data;

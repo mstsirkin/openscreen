@@ -261,7 +261,8 @@ void ControllableFileSender::StartPlaybackAt(Clock::duration position) {
 
 void ControllableFileSender::StartPausedKeepaliveAt(Clock::duration position) {
   StopCapturers();
-  if (CanStartVideoPassthroughAt(position) && video_sender_ && !video_encoder_) {
+  if (can_passthrough_video_ && IsViewportIdentity() && video_sender_ &&
+      !video_encoder_) {
     start_position_ = ClampPosition(position);
     last_known_position_ = start_position_;
     playback_start_time_ = env_.now() + settings_.playout_delay;
@@ -270,6 +271,7 @@ void ControllableFileSender::StartPausedKeepaliveAt(Clock::duration position) {
     passthrough_active_ = false;
     active_mode_ = kDirectVideoArmedMode;
     OSP_LOG_INFO << "ControllableFileSender active mode: " << active_mode_;
+    SchedulePausedKeepalive();
     return;
   }
   EnsureVideoEncoderCreated();
@@ -295,11 +297,13 @@ void ControllableFileSender::StopCapturers() {
   audio_capturer_.reset();
   video_capturer_.reset();
   video_passthrough_capturer_.reset();
+  video_passthrough_probe_capturer_.reset();
   pending_passthrough_packet_.reset();
   num_capturers_running_ = 0;
   is_playing_ = false;
   passthrough_active_ = false;
   passthrough_backpressured_ = false;
+  passthrough_reentry_pending_ = false;
 }
 
 bool ControllableFileSender::CanUseVideoPassthrough() {
@@ -356,9 +360,27 @@ void ControllableFileSender::FallbackToTranscode(const char* reason,
   EnsureVideoEncoderCreated();
   if (resume_playback) {
     StartPlaybackAt(position);
+    if (!disable_passthrough && can_passthrough_video_ && IsViewportIdentity()) {
+      StartPassthroughReentryProbe(position);
+    }
   } else {
     StartPausedKeepaliveAt(position);
   }
+}
+
+void ControllableFileSender::StartPassthroughReentryProbe(
+    Clock::duration position) {
+  if (!can_passthrough_video_ || !IsViewportIdentity() || !is_playing_) {
+    video_passthrough_probe_capturer_.reset();
+    passthrough_reentry_pending_ = false;
+    return;
+  }
+  video_passthrough_probe_capturer_.emplace(
+      env_, settings_.path_to_file.c_str(), playback_start_time_,
+      ClampPosition(position), *this);
+  passthrough_reentry_pending_ = true;
+  OSP_LOG_INFO << "Passthrough re-entry probe armed at "
+               << to_milliseconds(ClampPosition(position)).count() << "ms";
 }
 
 void ControllableFileSender::SchedulePausedKeepalive() {
@@ -379,6 +401,10 @@ void ControllableFileSender::SendPausedKeepaliveFrame() {
     return;
   }
   if (!video_capturer_.has_value()) {
+    if (can_passthrough_video_ && !video_encoder_) {
+      FallbackToTranscode("paused keepalive", last_known_position_, false);
+      return;
+    }
     StartPausedKeepaliveAt(last_known_position_);
     return;
   }
@@ -474,15 +500,25 @@ void ControllableFileSender::OnVideoFrame(const AVFrame& av_frame,
 }
 
 void ControllableFileSender::OnVideoPacket(
-    ByteView data,
+    std::vector<uint8_t> data,
     bool is_key_frame,
     Clock::duration media_timestamp,
     Clock::duration media_duration,
     Clock::time_point capture_begin_time,
     Clock::time_point capture_end_time,
     Clock::time_point reference_time) {
+  if (passthrough_reentry_pending_ && !passthrough_active_) {
+    if (is_key_frame) {
+      OSP_LOG_INFO << "Passthrough re-entry at "
+                   << to_milliseconds(media_timestamp).count() << "ms";
+      StartPlaybackAt(media_timestamp);
+    } else if (video_passthrough_probe_capturer_.has_value()) {
+      video_passthrough_probe_capturer_->Continue();
+    }
+    return;
+  }
   pending_passthrough_packet_ = PendingPassthroughPacket{
-      .data = std::vector<uint8_t>(data.begin(), data.end()),
+      .data = std::move(data),
       .is_key_frame = is_key_frame,
       .media_timestamp = media_timestamp,
       .media_duration = media_duration,
@@ -583,6 +619,12 @@ void ControllableFileSender::OnEndOfFile(SimulatedCapturer* capturer) {
 
 void ControllableFileSender::OnEndOfFile(
     SimulatedVideoPassthroughCapturer* capturer) {
+  if (video_passthrough_probe_capturer_.has_value() &&
+      &*video_passthrough_probe_capturer_ == capturer) {
+    video_passthrough_probe_capturer_.reset();
+    passthrough_reentry_pending_ = false;
+    return;
+  }
   --num_capturers_running_;
   if (num_capturers_running_ == 0) {
     StopCapturers();
@@ -603,6 +645,13 @@ void ControllableFileSender::OnError(SimulatedCapturer* capturer,
 void ControllableFileSender::OnError(
     SimulatedVideoPassthroughCapturer* capturer,
     const std::string& message) {
+  if (video_passthrough_probe_capturer_.has_value() &&
+      &*video_passthrough_probe_capturer_ == capturer) {
+    OSP_LOG_WARN << "Passthrough re-entry probe failed: " << message;
+    video_passthrough_probe_capturer_.reset();
+    passthrough_reentry_pending_ = false;
+    return;
+  }
   OSP_LOG_ERROR << "Passthrough sender failed: " << message;
   FallbackToTranscode("passthrough error", last_known_position_, is_playing_,
                       true);

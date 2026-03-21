@@ -110,6 +110,10 @@ Clock::duration Sender::GetCurrentRoundTripTime() const {
   return round_trip_time_;
 }
 
+RtpTimeTicks Sender::GetLastEnqueuedRtpTimestamp() const {
+  return pending_sender_report_.rtp_timestamp;
+}
+
 Sender::EnqueueFrameResult Sender::EnqueueFrame(const EncodedFrame& frame) {
   // Assume the fields of the `frame` have all been set correctly, with
   // monotonically increasing timestamps and a valid pointer to the data.
@@ -305,7 +309,7 @@ Clock::time_point Sender::GetRtpResumeTime() {
 }
 
 RtpTimeTicks Sender::GetLastRtpTimestamp() const {
-  return {};
+  return pending_sender_report_.rtp_timestamp;
 }
 
 StreamType Sender::GetStreamType() const {
