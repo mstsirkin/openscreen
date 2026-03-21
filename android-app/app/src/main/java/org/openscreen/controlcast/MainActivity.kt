@@ -323,39 +323,52 @@ class NativeBackedBackend : CastControlBackend {
         startPositionMs: Long,
         startPlaying: Boolean,
     ) {
-        openPfd1?.close()
-        openPfd2?.close()
-        openPfd1 = null
-        openPfd2 = null
+        var opened = false
+        try {
+            openPfd1?.close()
+            openPfd2?.close()
+            openPfd1 = null
+            openPfd2 = null
 
-        // Prefer fd-backed access for shared/external media. Some Android
-        // devices expose a readable path to Java but native ffmpeg still gets
-        // EACCES on direct open under scoped storage.
-        val filePath = resolveFilePath(context, uri)
-        if (filePath != null) {
-            nativeOpenVideoPath(
-                uri.toString(),
-                filePath,
-                mirrorLocally,
-                startPositionMs,
-                startPlaying,
-            )
-        } else {
-            // Fallback: open two independent fds for audio/video capturers.
-            openPfd1 = context.contentResolver.openFileDescriptor(uri, "r")
-            openPfd2 = context.contentResolver.openFileDescriptor(uri, "r")
-            val fd1 = openPfd1?.fd ?: -1
-            val fd2 = openPfd2?.fd ?: -1
-            nativeOpenVideo(
-                uri.toString(),
-                fd1,
-                fd2,
-                mirrorLocally,
-                startPositionMs,
-                startPlaying,
-            )
+            // Prefer fd-backed access for shared/external media. Some Android
+            // devices expose a readable path to Java but native ffmpeg still gets
+            // EACCES on direct open under scoped storage.
+            val filePath = resolveFilePath(context, uri)
+            if (filePath != null) {
+                nativeOpenVideoPath(
+                    uri.toString(),
+                    filePath,
+                    mirrorLocally,
+                    startPositionMs,
+                    startPlaying,
+                )
+            } else {
+                // Fallback: open two independent fds for audio/video capturers.
+                openPfd1 = context.contentResolver.openFileDescriptor(uri, "r")
+                openPfd2 = context.contentResolver.openFileDescriptor(uri, "r")
+                val fd1 = openPfd1?.fd ?: -1
+                val fd2 = openPfd2?.fd ?: -1
+                nativeOpenVideo(
+                    uri.toString(),
+                    fd1,
+                    fd2,
+                    mirrorLocally,
+                    startPositionMs,
+                    startPlaying,
+                )
+            }
+            opened = true
+        } catch (e: SecurityException) {
+            android.util.Log.e("ControlCast", "openVideo failed for $uri", e)
+            mutableStatus.value = "Open failed: permission denied for $uri"
+            openPfd1?.close()
+            openPfd2?.close()
+            openPfd1 = null
+            openPfd2 = null
         }
-        refreshStatus()
+        if (opened) {
+            refreshStatus()
+        }
     }
 
     private fun resolveFilePath(context: Context, uri: Uri): String? {
@@ -711,6 +724,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         mutableStateOf(getAutoReconnectTargets(context))
     }
     var castOpenedUri by rememberSaveable { mutableStateOf<String?>(null) }
+    var reconnectResumeArmed by rememberSaveable { mutableStateOf(false) }
+    var reconnectResumeUri by rememberSaveable { mutableStateOf<String?>(null) }
     val connectionState = connection.state
     val connectedDevice = connection.target
     val isConnected = connectionState == Connection.State.CONNECTED
@@ -769,15 +784,18 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         exoPlayer.pause()
         connection.pause()
         isPlaying = false
+        reconnectResumeArmed = false
     }
 
     fun playBoth() {
         exoPlayer.play()
         connection.play()
         isPlaying = true
+        reconnectResumeArmed = false
     }
 
     fun seekBoth(targetPositionMs: Long) {
+        reconnectResumeArmed = false
         positionMs = targetPositionMs.coerceAtLeast(0L)
         sliderValue = if (durationMs > 0L) {
             positionMs.toFloat() / durationMs.toFloat()
@@ -834,6 +852,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         startPlaying: Boolean,
         startPositionMs: Long,
     ) {
+        reconnectResumeArmed = false
+        reconnectResumeUri = uri.toString()
         selectedUri = uri
         val mediaItem = MediaItem.fromUri(uri)
         exoPlayer.setMediaItem(mediaItem)
@@ -896,6 +916,16 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     LaunchedEffect(connectionState) {
         if (connectionState == Connection.State.DISCONNECTED) {
             castOpenedUri = null
+            val currentUri = selectedUri?.toString()
+            if (isPlaying && currentUri != null) {
+                reconnectResumeArmed = true
+                reconnectResumeUri = currentUri
+                exoPlayer.pause()
+                isPlaying = false
+            } else if (currentUri == null) {
+                reconnectResumeArmed = false
+                reconnectResumeUri = null
+            }
         }
     }
 
@@ -908,6 +938,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     // Auto-load video shared from Gallery or other apps
     LaunchedEffect(sharedUri) {
         if (sharedUri != null) {
+            reconnectResumeArmed = false
+            reconnectResumeUri = sharedUri.toString()
             val shouldStartPlaying = if (connectionState == Connection.State.CONNECTED) {
                 isPlaying
             } else {
@@ -944,12 +976,19 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         if (connectedDevice != null && connectionState == Connection.State.CONNECTED) {
             selectedUri?.let { uri ->
                 val uriString = uri.toString()
+                val shouldResumeAfterReconnect =
+                    reconnectResumeArmed && reconnectResumeUri == uriString
                 if (castOpenedUri != uriString) {
                     openSelectedVideoOnCast(
                         uri,
-                        exoPlayer.isPlaying,
+                        shouldResumeAfterReconnect || exoPlayer.isPlaying,
                         exoPlayer.currentPosition.coerceAtLeast(0L),
                     )
+                }
+                if (shouldResumeAfterReconnect && localMirrorEnabled) {
+                    exoPlayer.play()
+                    isPlaying = true
+                    reconnectResumeArmed = false
                 }
             }
         }
@@ -1054,6 +1093,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
 
     val openVideoLauncher = rememberLauncherForActivityResult(OpenDocument()) { uri ->
         if (uri != null) {
+            reconnectResumeArmed = false
+            reconnectResumeUri = uri.toString()
             val shouldStartPlaying = if (connectionState == Connection.State.CONNECTED) {
                 isPlaying
             } else {
