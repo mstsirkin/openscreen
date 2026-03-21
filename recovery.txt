@@ -1,0 +1,39 @@
+Seek recovery plan
+
+1. Measure the transition cost.
+Record one attributable run for single off-keyframe seek and one for seek storm, capturing before/after screenshots plus DEBUG_PRINT and mode-switch logs. The goal is to quantify:
+- how long fallback stays active
+- whether the disruption is a blink, pause, or visible jump
+- whether cast/exo drift grows during the transition
+
+2. Reduce visible disruption during temporary fallback.
+Keep recovery in-session, but smooth the handoff:
+- avoid unnecessary pause/armed states during mode switches
+- keep local Exo pinned to cast-authoritative playback state during fallback/re-entry
+- minimize UI-visible resets when switching passthrough -> fallback -> passthrough
+
+3. Tackle backlog pressure during aggressive scrubbing.
+Refine seek-storm handling so stale media does not dominate output:
+- coalesce rapid seeks more aggressively
+- keep only a small amount of useful in-flight continuity during drag
+- once pressure crosses threshold, restart media production from the newest seek target without tearing down the cast session
+
+4. Add better debug proof for the scrubbing path.
+Keep DEBUG_PRINT, and extend/use it to confirm:
+- current mode
+- whether sender was reclaimed
+- in-flight duration vs max
+- latest seek target vs cast position
+This is to prove whether each change reduces backlog instead of just changing symptoms.
+
+5. Validate on-device with the same repros.
+For each committed build:
+- test single seek
+- test seek storm
+- verify:
+  - no crash
+  - no disconnect
+  - cast resumes visibly
+  - passthrough really returns
+  - disruption is reduced
+  - backlog pressure is improved, not just hidden

@@ -723,7 +723,6 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         mutableFloatStateOf(if (durationMs > 0L) positionMs.toFloat() / durationMs.toFloat() else 0f)
     }
     var sliderDragging by remember { mutableStateOf(false) }
-    var lastSeekMs by remember { mutableLongStateOf(0L) }
     // Only block polling during restore if we have a saved position to restore.
     // On fresh launch (positionMs=0), no restore needed — start polling immediately.
     var restored by remember { mutableStateOf(positionMs == 0L) }
@@ -739,6 +738,9 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var reconnectResumeUri by rememberSaveable { mutableStateOf<String?>(null) }
     var latestSeekTargetMs by rememberSaveable { mutableLongStateOf(-1L) }
     var latestSeekRealtimeMs by rememberSaveable { mutableLongStateOf(0L) }
+    var lastCastSeekDispatchRealtimeMs by remember { mutableLongStateOf(0L) }
+    var pendingCastSeekTargetMs by remember { mutableLongStateOf(-1L) }
+    var pendingCastSeekJob by remember { mutableStateOf<Job?>(null) }
     val connectionState = connection.state
     val connectedDevice = connection.target
     val isConnected = connectionState == Connection.State.CONNECTED
@@ -805,13 +807,35 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     }
 
     fun playBoth() {
-        exoPlayer.play()
         connection.play()
+        if (localMirrorEnabled) {
+            exoPlayer.play()
+        } else {
+            exoPlayer.pause()
+        }
         isPlaying = true
         reconnectResumeArmed = false
     }
 
-    fun seekBoth(targetPositionMs: Long) {
+    fun scheduleCastSeek(targetPositionMs: Long, forceImmediate: Boolean = false) {
+        val target = targetPositionMs.coerceAtLeast(0L)
+        pendingCastSeekTargetMs = target
+        pendingCastSeekJob?.cancel()
+        pendingCastSeekJob = coroutineScope.launch {
+            val now = android.os.SystemClock.elapsedRealtime()
+            val minGapMs = if (forceImmediate) 0L else 250L
+            val waitMs = (lastCastSeekDispatchRealtimeMs + minGapMs - now).coerceAtLeast(0L)
+            if (waitMs > 0L) {
+                delay(waitMs)
+            }
+            val dispatchTarget = pendingCastSeekTargetMs
+            pendingCastSeekTargetMs = -1L
+            connection.seekTo(dispatchTarget)
+            lastCastSeekDispatchRealtimeMs = android.os.SystemClock.elapsedRealtime()
+        }
+    }
+
+    fun seekBoth(targetPositionMs: Long, forceCastSeek: Boolean = false) {
         reconnectResumeArmed = false
         latestSeekTargetMs = targetPositionMs.coerceAtLeast(0L)
         latestSeekRealtimeMs = android.os.SystemClock.elapsedRealtime()
@@ -822,7 +846,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             0f
         }
         exoPlayer.seekTo(positionMs)
-        connection.seekTo(positionMs)
+        scheduleCastSeek(positionMs, forceCastSeek)
     }
 
     suspend fun runSeekSequence(command: DebugCommand.SeekTo) {
@@ -838,7 +862,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 lastTime = targetTime
             }
         } else if (command.positionMs != null) {
-            seekBoth(command.positionMs)
+            seekBoth(command.positionMs, forceCastSeek = true)
         }
     }
 
@@ -1100,17 +1124,44 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
 
     LaunchedEffect(exoPlayer) {
         while (true) {
-            durationMs = if (exoPlayer.mediaItemCount > 0) {
+            val castConnected = connectionState == Connection.State.CONNECTED
+            val castPos = connection.getCastPositionMs().coerceAtLeast(0L)
+            val castDur = connection.getCastDurationMs().coerceAtLeast(0L)
+            val castPlaying = connection.isCastPlaying()
+            val exoPos = exoPlayer.currentPosition.coerceAtLeast(0L)
+            val exoHasMedia = exoPlayer.mediaItemCount > 0
+            durationMs = if (castConnected && castDur > 0L) {
+                castDur
+            } else if (exoHasMedia) {
                 exoPlayer.duration.coerceAtLeast(0L)
             } else {
-                connection.getCastDurationMs().coerceAtLeast(0L)
+                castDur
+            }
+            if (castConnected && exoHasMedia && restored) {
+                val driftMs = kotlin.math.abs(exoPos - castPos)
+                val recentSeek = latestSeekRealtimeMs > 0L &&
+                    android.os.SystemClock.elapsedRealtime() - latestSeekRealtimeMs < 2500L
+                val syncThresholdMs = if (recentSeek) 150L else 300L
+                if (!sliderDragging && castPos > 0L && driftMs > syncThresholdMs) {
+                    exoPlayer.seekTo(castPos)
+                }
+                if (castPlaying) {
+                    if (localMirrorEnabled) {
+                        exoPlayer.play()
+                    } else {
+                        exoPlayer.pause()
+                    }
+                } else {
+                    exoPlayer.pause()
+                }
             }
             if (!sliderDragging && restored) {
-                // Use ExoPlayer position if loaded, else Cast position
-                positionMs = if (exoPlayer.mediaItemCount > 0) {
+                positionMs = if (castConnected && castPos > 0L) {
+                    castPos
+                } else if (exoHasMedia) {
                     exoPlayer.currentPosition.coerceAtLeast(0L)
                 } else {
-                    connection.getCastPositionMs().coerceAtLeast(0L)
+                    castPos
                 }
                 sliderValue = if (durationMs > 0L) {
                     positionMs.toFloat() / durationMs.toFloat()
@@ -1118,10 +1169,12 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                     0f
                 }
             }
-            isPlaying = if (exoPlayer.mediaItemCount > 0) {
+            isPlaying = if (castConnected) {
+                castPlaying
+            } else if (exoHasMedia) {
                 exoPlayer.isPlaying
             } else {
-                connection.isCastPlaying()
+                castPlaying
             }
             delay(200)
         }
@@ -1172,12 +1225,9 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             sliderValue = sliderValue,
             onSliderChange = {
                 sliderDragging = true; sliderValue = it; positionMs = (durationMs * it).toLong()
-                val now = System.currentTimeMillis()
-                if (now - lastSeekMs > 200) {
-                    lastSeekMs = now; exoPlayer.seekTo(positionMs); connection.seekTo(positionMs)
-                }
+                seekBoth(positionMs)
             },
-            onSliderFinished = { sliderDragging = false; exoPlayer.seekTo(positionMs); connection.seekTo(positionMs) },
+            onSliderFinished = { sliderDragging = false; seekBoth(positionMs, forceCastSeek = true) },
             sliderEnabled = durationMs > 0L,
             positionMs = positionMs,
             durationMs = durationMs,
@@ -1468,16 +1518,11 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                     sliderDragging = true
                     sliderValue = it
                     positionMs = (durationMs * it).toLong()
-                    // Throttled seek to both local and Cast during drag
-                    val now = System.currentTimeMillis()
-                    if (now - lastSeekMs > 200) {
-                        lastSeekMs = now
-                        seekBoth(positionMs)
-                    }
+                    seekBoth(positionMs)
                 },
                 onValueChangeFinished = {
                     sliderDragging = false
-                    seekBoth(positionMs)
+                    seekBoth(positionMs, forceCastSeek = true)
                 },
                 enabled = durationMs > 0L,
             )
