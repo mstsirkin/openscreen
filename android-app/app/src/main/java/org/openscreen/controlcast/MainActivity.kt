@@ -169,6 +169,17 @@ private fun debugTargetToCastDevice(target: String): CastDevice? {
     }
 }
 
+private fun displayNameForUri(context: Context, uri: Uri?): String {
+    if (uri == null) return "No file"
+    if (uri.scheme == "file") {
+        return java.io.File(uri.path.orEmpty()).name.takeIf { it.isNotBlank() } ?: "No file"
+    }
+    return DocumentFile.fromSingleUri(context, uri)?.name
+        ?: uri.lastPathSegment?.substringAfterLast('/')
+        ?: uri.toString().takeIf { it.isNotBlank() }
+        ?: "No file"
+}
+
 class MainActivity : ComponentActivity() {
     // Saved across rotation via onSaveInstanceState
     var savedPosition = 0L
@@ -1325,8 +1336,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 Text(if (isPlaying) "Pause" else "Play")
             }
             Text(
-                text = DocumentFile.fromSingleUri(context, selectedUri ?: Uri.EMPTY)?.name
-                    ?: "No file",
+                text = displayNameForUri(context, selectedUri),
                 modifier = Modifier.weight(1f),
                 color = Color(0xFFD9E2EC),
             )

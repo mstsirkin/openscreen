@@ -368,10 +368,14 @@ void ControllableFileSender::ReclaimVideoSenderFromEncoder() {
   if (!video_encoder_) {
     return;
   }
+  OSP_LOG_INFO << "Reclaiming video sender from fallback encoder";
   video_sender_ = video_encoder_->ReleaseSender();
   video_encoder_.reset();
   if (video_sender_) {
     video_sender_->SetObserver(this);
+    OSP_LOG_INFO << "Video sender reclaimed for passthrough";
+  } else {
+    OSP_LOG_WARN << "Failed to reclaim video sender from fallback encoder";
   }
 }
 
@@ -715,6 +719,8 @@ std::string ControllableFileSender::GetDebugStateString() const {
   stream << "pt_active=" << (passthrough_active_ ? 1 : 0)
          << " pt_bp=" << (passthrough_backpressured_ ? 1 : 0)
          << " pt_reentry=" << (passthrough_reentry_pending_ ? 1 : 0)
+         << " has_vs=" << (video_sender_ ? 1 : 0)
+         << " has_ve=" << (video_encoder_ ? 1 : 0)
          << " pending_pkt=" << (pending_passthrough_packet_ ? 1 : 0)
          << " playing=" << (is_playing_ ? 1 : 0)
          << " pos_ms=" << to_milliseconds(last_known_position_).count()
