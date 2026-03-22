@@ -103,6 +103,7 @@ sealed interface DebugCommand {
     data class SetLocalMirror(val enabled: Boolean) : DebugCommand
     data class SetLocalSound(val enabled: Boolean) : DebugCommand
     data class SetHwEncode(val enabled: Boolean) : DebugCommand
+    data class SetVideoPassthrough(val enabled: Boolean) : DebugCommand
     data object Print : DebugCommand
 }
 
@@ -147,6 +148,8 @@ private fun Intent.toDebugCommand(): DebugCommand? {
             DebugCommand.SetLocalSound(getBooleanExtra("enabled", true))
         "org.openscreen.controlcast.DEBUG_SET_HW_ENCODE" ->
             DebugCommand.SetHwEncode(getBooleanExtra("enabled", true))
+        "org.openscreen.controlcast.DEBUG_SET_VIDEO_PASSTHROUGH" ->
+            DebugCommand.SetVideoPassthrough(getBooleanExtra("enabled", false))
         "org.openscreen.controlcast.DEBUG_PRINT" -> DebugCommand.Print
         else -> null
     }
@@ -912,7 +915,10 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
 
     fun setVideoPassthroughEnabled(enabled: Boolean) {
         if (selectedUri != null) {
-            pauseBoth()
+            exoPlayer.pause()
+            connection.pause()
+            isPlaying = false
+            reconnectResumeArmed = false
         }
         videoPassthroughEnabled = enabled
         prefs.edit().putBoolean("video_passthrough_enabled", enabled).apply()
@@ -1256,6 +1262,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 is DebugCommand.SetLocalMirror -> setLocalMirrorEnabled(command.enabled)
                 is DebugCommand.SetLocalSound -> setLocalSoundEnabled(command.enabled)
                 is DebugCommand.SetHwEncode -> setHwEncodeEnabled(command.enabled)
+                is DebugCommand.SetVideoPassthrough -> setVideoPassthroughEnabled(command.enabled)
                 DebugCommand.Print -> printDebugState("intent")
             }
         }
