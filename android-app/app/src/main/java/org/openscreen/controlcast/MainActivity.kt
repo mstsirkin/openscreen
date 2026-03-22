@@ -1335,7 +1335,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(
-                            if (isConnected && isCurrentTarget) Color(0xFF1E3A5F)
+                            if (isConnected && isCurrentTarget) Color(0xFF27486E)
                             else Color(0xFF182028),
                             RoundedCornerShape(8.dp),
                         )
