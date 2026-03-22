@@ -914,12 +914,6 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     }
 
     fun setVideoPassthroughEnabled(enabled: Boolean) {
-        if (selectedUri != null) {
-            exoPlayer.pause()
-            connection.pause()
-            isPlaying = false
-            reconnectResumeArmed = false
-        }
         videoPassthroughEnabled = enabled
         prefs.edit().putBoolean("video_passthrough_enabled", enabled).apply()
         backend.setVideoPassthroughEnabled(enabled)
@@ -1363,10 +1357,6 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             }
             delay(200)
         }
-    }
-
-    LaunchedEffect(videoPassthroughEnabled) {
-        backend.setVideoPassthroughEnabled(videoPassthroughEnabled)
     }
 
     val openVideoLauncher = rememberLauncherForActivityResult(OpenDocument()) { uri ->

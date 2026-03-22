@@ -859,28 +859,13 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeSetVideoPassthroughEna
     jobject thiz,
     jboolean enabled) {
   auto& state = State();
-  bool should_restart = false;
   {
     std::lock_guard<std::mutex> lock(state.mutex);
     state.enable_video_passthrough = enabled == JNI_TRUE;
-    if (!state.video_uri.empty()) {
-      state.playing = false;
-      state.desired_playing = false;
-      state.pending_open_position_ms = state.position_ms;
-      state.has_pending_open_position = true;
-      should_restart =
-          !state.connection.target.empty() && !state.video_path.empty();
-    }
     UpdateStatusLocked(state);
   }
   LOGI("Video passthrough %s",
        state.enable_video_passthrough ? "enabled" : "disabled");
-#ifdef HAVE_OPENSCREEN
-  if (should_restart) {
-    EnsureTaskRunner(state);
-    RequestCastSessionRestart(state, "nativeSetVideoPassthroughEnabled");
-  }
-#endif
 }
 
 extern "C" JNIEXPORT void JNICALL
