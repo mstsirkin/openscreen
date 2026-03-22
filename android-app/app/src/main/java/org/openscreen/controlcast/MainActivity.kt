@@ -843,6 +843,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var reconnectResumeArmed by rememberSaveable { mutableStateOf(false) }
     var reconnectResumeUri by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingSharedUri by rememberSaveable { mutableStateOf<Uri?>(null) }
+    var pendingExternalPlayUri by rememberSaveable { mutableStateOf<String?>(null) }
     var latestSeekTargetMs by rememberSaveable { mutableLongStateOf(-1L) }
     var latestSeekRealtimeMs by rememberSaveable { mutableLongStateOf(0L) }
     var lastCastSeekDispatchRealtimeMs by remember { mutableLongStateOf(0L) }
@@ -926,6 +927,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     }
 
     fun pauseBoth() {
+        pendingExternalPlayUri = null
         exoPlayer.pause()
         connection.pause()
         isPlaying = false
@@ -933,6 +935,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     }
 
     fun playBoth() {
+        pendingExternalPlayUri = null
         connection.play()
         if (localMirrorEnabled) {
             exoPlayer.play()
@@ -1031,6 +1034,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         startPlaying: Boolean,
         startPositionMs: Long,
     ) {
+        pendingExternalPlayUri = null
         reconnectResumeArmed = false
         reconnectResumeUri = uri.toString()
         selectedUri = uri
@@ -1071,13 +1075,10 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             return
         }
         pendingSharedUri = null
-        val shouldStartPlaying = if (connectionState == Connection.State.CONNECTED) {
-            isPlaying
-        } else {
-            localMirrorEnabled
-        }
+        val shouldStartPlaying = true
         // Keep local paused until Cast is connected/opened so the app does not
         // race ahead from a cold start.
+        pendingExternalPlayUri = uri.toString()
         reconnectResumeArmed =
             shouldStartPlaying && connectionState != Connection.State.CONNECTED
         reconnectResumeUri = uri.toString()
@@ -1091,6 +1092,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         isPlaying = false
         if (connectionState == Connection.State.CONNECTED) {
             openSelectedVideoOnCast(uri, shouldStartPlaying, startPositionMs = 0L)
+            pendingExternalPlayUri = null
         }
     }
 
@@ -1204,16 +1206,20 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 val uriString = uri.toString()
                 val shouldResumeAfterReconnect =
                     reconnectResumeArmed && reconnectResumeUri == uriString
+                val shouldPlayPendingExternal = pendingExternalPlayUri == uriString
                 android.util.Log.i(
                     "ControlCast",
-                    "connected effect uri=$uriString castOpenedUri=$castOpenedUri shouldResumeAfterReconnect=$shouldResumeAfterReconnect exoPlaying=${exoPlayer.isPlaying} reconnectResumeArmed=$reconnectResumeArmed",
+                    "connected effect uri=$uriString castOpenedUri=$castOpenedUri shouldResumeAfterReconnect=$shouldResumeAfterReconnect shouldPlayPendingExternal=$shouldPlayPendingExternal exoPlaying=${exoPlayer.isPlaying} reconnectResumeArmed=$reconnectResumeArmed",
                 )
                 if (castOpenedUri != uriString) {
                     openSelectedVideoOnCast(
                         uri,
-                        shouldResumeAfterReconnect || exoPlayer.isPlaying,
-                        exoPlayer.currentPosition.coerceAtLeast(0L),
+                        shouldPlayPendingExternal || shouldResumeAfterReconnect || exoPlayer.isPlaying,
+                        if (shouldPlayPendingExternal) 0L else exoPlayer.currentPosition.coerceAtLeast(0L),
                     )
+                    if (shouldPlayPendingExternal) {
+                        pendingExternalPlayUri = null
+                    }
                 }
                 if (shouldResumeAfterReconnect && localMirrorEnabled) {
                     exoPlayer.play()
@@ -1361,6 +1367,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
 
     val openVideoLauncher = rememberLauncherForActivityResult(OpenDocument()) { uri ->
         if (uri != null) {
+            pendingExternalPlayUri = null
             val shouldStartPlaying = if (connectionState == Connection.State.CONNECTED) {
                 isPlaying
             } else {
@@ -1396,6 +1403,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             isPlaying = isPlaying,
             onPlayPause = {
                 try {
+                    pendingExternalPlayUri = null
                     if (isPlaying) { exoPlayer.pause(); connection.pause() }
                     else { exoPlayer.play(); connection.play() }
                     isPlaying = !isPlaying
