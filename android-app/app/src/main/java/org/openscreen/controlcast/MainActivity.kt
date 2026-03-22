@@ -2,10 +2,12 @@ package org.openscreen.controlcast
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.system.OsConstants
@@ -185,8 +187,12 @@ class MainActivity : ComponentActivity() {
     var savedPosition = 0L
     var savedPlaying = false
     private val debugCommands = Channel<DebugCommand>(Channel.UNLIMITED)
+    private val sharedVideoUris = Channel<Uri>(Channel.UNLIMITED)
+    private val videoReadPermissionResults = Channel<Boolean>(Channel.UNLIMITED)
 
     fun debugCommandsFlow() = debugCommands.receiveAsFlow()
+    fun sharedVideoUrisFlow() = sharedVideoUris.receiveAsFlow()
+    fun videoReadPermissionResultsFlow() = videoReadPermissionResults.receiveAsFlow()
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
@@ -211,8 +217,46 @@ class MainActivity : ComponentActivity() {
         ))
     }
 
+    private val videoReadPermissionLauncher = registerForActivityResult(
+        RequestMultiplePermissions()
+    ) { results ->
+        videoReadPermissionResults.trySend(results.values.all { it })
+    }
+
+    fun hasVideoReadPermission(): Boolean {
+        val permission = if (Build.VERSION.SDK_INT >= 33) {
+            android.Manifest.permission.READ_MEDIA_VIDEO
+        } else {
+            android.Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+        return checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun requestVideoReadPermission() {
+        val permissions = if (Build.VERSION.SDK_INT >= 33) {
+            arrayOf(android.Manifest.permission.READ_MEDIA_VIDEO)
+        } else {
+            arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+        videoReadPermissionLauncher.launch(permissions)
+    }
+
     private fun enqueueDebugIntent(intent: Intent?) {
         intent?.toDebugCommand()?.let { debugCommands.trySend(it) }
+    }
+
+    private fun extractSharedVideoUri(intent: Intent?): Uri? {
+        return when (intent?.action) {
+            android.content.Intent.ACTION_SEND ->
+                intent.getParcelableExtra(android.content.Intent.EXTRA_STREAM)
+            android.content.Intent.ACTION_VIEW,
+            "com.android.camera.action.REVIEW" -> intent.data
+            else -> null
+        }
+    }
+
+    private fun enqueueSharedVideoIntent(intent: Intent?) {
+        extractSharedVideoUri(intent)?.let { sharedVideoUris.trySend(it) }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -226,12 +270,7 @@ class MainActivity : ComponentActivity() {
         val testCalibrate = intent?.getBooleanExtra("test_calibrate", false) == true
         val testFullscreen = intent?.getBooleanExtra("test_fullscreen", false) == true
         // Handle shared video from Gallery or other apps
-        val sharedUri = when (intent?.action) {
-            android.content.Intent.ACTION_SEND ->
-                intent.getParcelableExtra<Uri>(android.content.Intent.EXTRA_STREAM)
-            android.content.Intent.ACTION_VIEW -> intent.data
-            else -> null
-        }
+        val sharedUri = extractSharedVideoUri(intent)
         enableEdgeToEdge()
         setContent {
             MaterialTheme {
@@ -250,6 +289,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         enqueueDebugIntent(intent)
+        enqueueSharedVideoIntent(intent)
     }
 
     private fun bindProcessToWifi() {
@@ -790,6 +830,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var castOpenedUri by rememberSaveable { mutableStateOf<String?>(null) }
     var reconnectResumeArmed by rememberSaveable { mutableStateOf(false) }
     var reconnectResumeUri by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingSharedUri by rememberSaveable { mutableStateOf<Uri?>(null) }
     var latestSeekTargetMs by rememberSaveable { mutableLongStateOf(-1L) }
     var latestSeekRealtimeMs by rememberSaveable { mutableLongStateOf(0L) }
     var lastCastSeekDispatchRealtimeMs by remember { mutableLongStateOf(0L) }
@@ -995,6 +1036,49 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         }
     }
 
+    suspend fun loadIncomingSharedVideo(uri: Uri) {
+        val activityContext = context as? MainActivity
+        if (uri.scheme == "content" &&
+            activityContext != null &&
+            !activityContext.hasVideoReadPermission()
+        ) {
+            pendingSharedUri = uri
+            Toast.makeText(
+                context,
+                "Allow video access to open the selected clip.",
+                Toast.LENGTH_SHORT,
+            ).show()
+            activityContext.requestVideoReadPermission()
+            return
+        }
+        pendingSharedUri = null
+        val shouldStartPlaying = if (connectionState == Connection.State.CONNECTED) {
+            isPlaying
+        } else {
+            localMirrorEnabled
+        }
+        // Keep local paused until Cast is connected/opened so the app does not
+        // race ahead from a cold start.
+        reconnectResumeArmed =
+            shouldStartPlaying && connectionState != Connection.State.CONNECTED
+        reconnectResumeUri = uri.toString()
+        selectedUri = uri
+        val mediaItem = MediaItem.fromUri(uri)
+        exoPlayer.setMediaItem(mediaItem)
+        exoPlayer.prepare()
+        if (localMirrorEnabled && shouldStartPlaying &&
+            connectionState == Connection.State.CONNECTED
+        ) {
+            exoPlayer.play()
+        } else {
+            exoPlayer.pause()
+        }
+        isPlaying = shouldStartPlaying
+        if (connectionState == Connection.State.CONNECTED) {
+            openSelectedVideoOnCast(uri, shouldStartPlaying)
+        }
+    }
+
     // Load test file into ExoPlayer for local preview + slider
     LaunchedEffect(testFile, exoPlayer) {
         if (!testFile.isNullOrEmpty() && exoPlayer.mediaItemCount == 0) {
@@ -1060,29 +1144,30 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
 
     // Auto-load video shared from Gallery or other apps
     LaunchedEffect(sharedUri) {
-        if (sharedUri != null) {
-            val shouldStartPlaying = if (connectionState == Connection.State.CONNECTED) {
-                isPlaying
-            } else {
-                localMirrorEnabled
-            }
-            // Exception for externally shared media: keep local paused until Cast is
-            // connected/opened so the app does not race ahead from a cold start.
-            reconnectResumeArmed =
-                shouldStartPlaying && connectionState != Connection.State.CONNECTED
-            reconnectResumeUri = sharedUri.toString()
-            selectedUri = sharedUri
-            val mediaItem = MediaItem.fromUri(sharedUri)
-            exoPlayer.setMediaItem(mediaItem)
-            exoPlayer.prepare()
-            if (localMirrorEnabled && shouldStartPlaying && connectionState == Connection.State.CONNECTED) {
-                exoPlayer.play()
-            } else {
-                exoPlayer.pause()
-            }
-            isPlaying = shouldStartPlaying
-            if (connectionState == Connection.State.CONNECTED) {
-                openSelectedVideoOnCast(sharedUri, shouldStartPlaying)
+        sharedUri?.let { loadIncomingSharedVideo(it) }
+    }
+
+    LaunchedEffect(activity) {
+        val sharedFlow = activity?.sharedVideoUrisFlow() ?: return@LaunchedEffect
+        sharedFlow.collect { uri ->
+            loadIncomingSharedVideo(uri)
+        }
+    }
+
+    LaunchedEffect(activity, pendingSharedUri) {
+        val permissionFlow = activity?.videoReadPermissionResultsFlow()
+            ?: return@LaunchedEffect
+        permissionFlow.collect { granted ->
+            val pending = pendingSharedUri
+            if (granted && pending != null) {
+                loadIncomingSharedVideo(pending)
+            } else if (!granted && pending != null) {
+                pendingSharedUri = null
+                Toast.makeText(
+                    context,
+                    "Video access was denied.",
+                    Toast.LENGTH_SHORT,
+                ).show()
             }
         }
     }

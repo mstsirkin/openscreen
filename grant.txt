@@ -1,0 +1,26 @@
+Open Camera handoff issue
+
+Observed launch from Open Camera to `org.openscreen.controlcast` used:
+- action: `com.android.camera.action.REVIEW`
+- data: `content://media/external/video/media/2366`
+- flags: `0x3800000`
+
+Problem:
+- The intent did not include `FLAG_GRANT_READ_URI_PERMISSION` (`0x1`).
+- Without that temporary URI grant, the receiving app cannot rely on direct
+  access to the `content://` video URI unless it separately holds media read
+  permission.
+
+Effect:
+- The app can appear in the chooser and launch correctly.
+- The selected video may still fail to open because the URI itself is not
+  readable to the receiving app.
+
+Expected fix on sender side:
+- When Open Camera starts the review/view intent for a captured video URI, it
+  should add `Intent.FLAG_GRANT_READ_URI_PERMISSION`.
+
+Receiver-side mitigation implemented here:
+- Request `READ_MEDIA_VIDEO` on Android 13+ or `READ_EXTERNAL_STORAGE` on older
+  Android versions when a shared `content://` video arrives without sufficient
+  access, then retry opening the URI.
