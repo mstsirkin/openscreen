@@ -1376,36 +1376,38 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         }
 
         // Video controls
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Button(onClick = { openVideoLauncher.launch(arrayOf("video/*")) }) {
-                Text("Open Video")
-            }
-            Button(
-                onClick = {
-                    if (isPlaying) pauseBoth() else playBoth()
-                },
-                enabled = selectedUri != null,
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(if (isPlaying) "Pause" else "Play")
+                Button(onClick = { openVideoLauncher.launch(arrayOf("video/*")) }) {
+                    Text("Open Video")
+                }
+                Button(
+                    onClick = {
+                        if (isPlaying) pauseBoth() else playBoth()
+                    },
+                    enabled = selectedUri != null,
+                ) {
+                    Text(if (isPlaying) "Pause" else "Play")
+                }
+                Button(
+                    onClick = { showAdvancedControls = !showAdvancedControls },
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        horizontal = 12.dp,
+                        vertical = 8.dp,
+                    ),
+                ) {
+                    Text(if (showAdvancedControls) "−" else "+")
+                }
             }
             Text(
                 text = displayNameForUri(context, selectedUri),
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxWidth(),
                 color = Color(0xFFD9E2EC),
             )
-            Button(
-                onClick = { showAdvancedControls = !showAdvancedControls },
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                    horizontal = 12.dp,
-                    vertical = 8.dp,
-                ),
-            ) {
-                Text(if (showAdvancedControls) "−" else "+")
-            }
         }
 
         if (showAdvancedControls) {
