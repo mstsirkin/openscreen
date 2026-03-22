@@ -86,6 +86,7 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
   void SendPausedKeepaliveFrame();
   void RetryPendingPassthroughPacket();
   void UpdateStatusOnConsole();
+  RtpTimeTicks GetAdjustedPassthroughRtpTimestamp(Clock::duration media_timestamp);
   Clock::duration ClampPosition(Clock::duration position) const;
   VideoViewport ClampViewport(const VideoViewport& viewport) const;
 
@@ -163,6 +164,7 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
   bool passthrough_active_ = false;
   bool passthrough_backpressured_ = false;
   bool passthrough_reentry_pending_ = false;
+  RtpTimeDelta passthrough_rtp_offset_{};
   std::string active_mode_;
   struct PendingPassthroughPacket {
     std::vector<uint8_t> data;

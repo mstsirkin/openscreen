@@ -189,6 +189,27 @@ Clock::duration ControllableFileSender::GetCurrentPosition() const {
                                                   Clock::duration::zero()));
 }
 
+RtpTimeTicks ControllableFileSender::GetAdjustedPassthroughRtpTimestamp(
+    Clock::duration media_timestamp) {
+  OSP_CHECK(video_sender_);
+  const auto raw_rtp = RtpTimeTicks::FromTimeSinceOrigin(
+      media_timestamp, video_sender_->rtp_timebase());
+  const auto frame_id = video_sender_->GetNextFrameId();
+  if (frame_id != FrameId::first()) {
+    const auto last_rtp = video_sender_->GetLastEnqueuedRtpTimestamp();
+    auto adjusted_rtp = raw_rtp + passthrough_rtp_offset_;
+    if (adjusted_rtp <= last_rtp) {
+      passthrough_rtp_offset_ =
+          (last_rtp - raw_rtp) + RtpTimeDelta::FromTicks(1);
+      adjusted_rtp = raw_rtp + passthrough_rtp_offset_;
+      OSP_LOG_INFO << "Passthrough RTP offset bumped to preserve monotonicity: "
+                   << passthrough_rtp_offset_;
+    }
+    return adjusted_rtp;
+  }
+  return raw_rtp + passthrough_rtp_offset_;
+}
+
 Clock::duration ControllableFileSender::GetDuration() const {
   return media_duration_;
 }
@@ -614,12 +635,12 @@ void ControllableFileSender::RetryPendingPassthroughPacket() {
     FallbackToTranscode("non-keyframe start", computed_position, true, true);
     return;
   }
+  const auto rtp_timestamp = GetAdjustedPassthroughRtpTimestamp(media_timestamp);
   EncodedFrame frame(
       is_key_frame ? EncodedFrame::Dependency::kKeyFrame
                    : EncodedFrame::Dependency::kDependent,
       frame_id, is_key_frame ? frame_id : frame_id - 1,
-      RtpTimeTicks::FromTimeSinceOrigin(media_timestamp,
-                                        video_sender_->rtp_timebase()),
+      rtp_timestamp,
       reference_time, std::chrono::milliseconds::zero(), capture_begin_time,
       capture_end_time, data);
   const auto result = video_sender_->EnqueueFrame(frame);
@@ -745,8 +766,9 @@ std::string ControllableFileSender::GetDebugStateString() const {
            << " pending_bytes=" << pending_passthrough_packet_->data.size();
     if (video_sender_) {
       const auto pending_rtp = RtpTimeTicks::FromTimeSinceOrigin(
-          pending_passthrough_packet_->media_timestamp,
-          video_sender_->rtp_timebase());
+                                   pending_passthrough_packet_->media_timestamp,
+                                   video_sender_->rtp_timebase()) +
+                               passthrough_rtp_offset_;
       stream << " pending_inflight_ms="
              << to_milliseconds(
                     video_sender_->GetInFlightMediaDuration(pending_rtp))
@@ -754,11 +776,13 @@ std::string ControllableFileSender::GetDebugStateString() const {
              << " pending_max_inflight_ms="
              << to_milliseconds(video_sender_->GetMaxInFlightMediaDuration())
                     .count();
+      stream << " pt_rtp_offset_ticks="
+             << (passthrough_rtp_offset_ / RtpTimeDelta::FromTicks(1));
     }
   } else if (video_sender_) {
     stream << " pending_max_inflight_ms="
            << to_milliseconds(video_sender_->GetMaxInFlightMediaDuration())
-                  .count();
+                   .count();
   }
   stream << " capturers=" << num_capturers_running_;
   return stream.str();
