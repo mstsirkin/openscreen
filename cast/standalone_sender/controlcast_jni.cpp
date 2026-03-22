@@ -77,6 +77,7 @@ struct ControllerState {
   int video_fd2 = -1;
   std::string video_path;
   bool use_hw_encode = true;
+  bool enable_video_passthrough = false;
   int brightness = 0;
   long long av_sync_offset_ms = 0;
   int playout_delay_ms = 400;
@@ -120,6 +121,7 @@ void UpdateStatusLocked(ControllerState& state) {
     if (!state.connection.target.empty()) {
       stream << " Target: " << state.connection.target;
     }
+    stream << " | video pt " << (state.enable_video_passthrough ? "on" : "off");
     if (!state.active_mode.empty()) {
       stream << " | mode " << state.active_mode;
     }
@@ -139,6 +141,7 @@ void UpdateStatusLocked(ControllerState& state) {
     stream << " @ " << state.position_ms / 1000.0 << "s";
     stream << " | zoom " << state.zoom;
     stream << " | local mirror " << (state.mirror_locally ? "on" : "off");
+    stream << " | video pt " << (state.enable_video_passthrough ? "on" : "off");
     if (!state.active_mode.empty()) {
       stream << " | mode " << state.active_mode;
     }
@@ -305,11 +308,13 @@ void StartCastSessionOnTaskRunner(ControllerState& state,
   settings.playout_delay =
       std::chrono::milliseconds(state.playout_delay_ms);
   settings.brightness = std::clamp(state.brightness, -200, 200);
+  settings.enable_video_passthrough = state.enable_video_passthrough;
 
-  LOGI("TaskRunner: connecting buf=%dms avsync=%lldms brightness=%d file=%s",
+  LOGI("TaskRunner: connecting buf=%dms avsync=%lldms brightness=%d pt=%d file=%s",
        state.playout_delay_ms,
        (long long)state.av_sync_offset_ms,
        state.brightness,
+       state.enable_video_passthrough ? 1 : 0,
        video_path.c_str());
   state.connection.cast->Connect(std::move(settings));
   LOGI("TaskRunner: connect initiated");
@@ -846,6 +851,36 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeSetHwEncode(
   std::lock_guard<std::mutex> lock(state.mutex);
   state.use_hw_encode = enabled == JNI_TRUE;
   LOGI("Hardware encoding %s", state.use_hw_encode ? "enabled" : "disabled");
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_org_openscreen_controlcast_NativeBackedBackend_nativeSetVideoPassthroughEnabled(
+    JNIEnv* env,
+    jobject thiz,
+    jboolean enabled) {
+  auto& state = State();
+  bool should_restart = false;
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.enable_video_passthrough = enabled == JNI_TRUE;
+    if (!state.video_uri.empty()) {
+      state.playing = false;
+      state.desired_playing = false;
+      state.pending_open_position_ms = state.position_ms;
+      state.has_pending_open_position = true;
+      should_restart =
+          !state.connection.target.empty() && !state.video_path.empty();
+    }
+    UpdateStatusLocked(state);
+  }
+  LOGI("Video passthrough %s",
+       state.enable_video_passthrough ? "enabled" : "disabled");
+#ifdef HAVE_OPENSCREEN
+  if (should_restart) {
+    EnsureTaskRunner(state);
+    RequestCastSessionRestart(state, "nativeSetVideoPassthroughEnabled");
+  }
+#endif
 }
 
 extern "C" JNIEXPORT void JNICALL

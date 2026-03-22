@@ -67,6 +67,10 @@ struct ConnectionSettings {
   // Range is [-200, 200], with 0 meaning no adjustment. Non-zero brightness
   // requires transcode rather than passthrough.
   int brightness = 0;
+
+  // Whether direct video passthrough is allowed at all. Disabled by default
+  // so the app stays on the fallback transcode path unless explicitly enabled.
+  bool enable_video_passthrough = false;
 };
 
 }  // namespace openscreen::cast

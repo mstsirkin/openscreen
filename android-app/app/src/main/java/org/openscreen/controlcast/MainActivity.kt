@@ -512,6 +512,11 @@ class NativeBackedBackend : CastControlBackend {
         refreshStatus()
     }
 
+    fun setVideoPassthroughEnabled(enabled: Boolean) {
+        nativeSetVideoPassthroughEnabled(enabled)
+        refreshStatus()
+    }
+
     fun syncStatus() {
         refreshStatus()
     }
@@ -574,6 +579,7 @@ class NativeBackedBackend : CastControlBackend {
     private external fun nativeIsConnected(): Boolean
     private external fun nativeSetAvSyncOffset(offsetMs: Long)
     private external fun nativeSetHwEncode(enabled: Boolean)
+    private external fun nativeSetVideoPassthroughEnabled(enabled: Boolean)
     private external fun nativeSetBrightness(brightness: Int)
     private external fun nativeTestCast(target: String, filePath: String)
 
@@ -802,11 +808,15 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             volume = 0f  // Muted by default — sound goes to Cast receiver.
         }
     }
+    val prefs = remember { context.getSharedPreferences("cast_ui", Context.MODE_PRIVATE) }
 
     var selectedUri by rememberSaveable { mutableStateOf<Uri?>(null) }
     var localMirrorEnabled by rememberSaveable { mutableStateOf(true) }
     var localSoundEnabled by rememberSaveable { mutableStateOf(false) }
     var hwEncodeEnabled by rememberSaveable { mutableStateOf(true) }
+    var videoPassthroughEnabled by rememberSaveable {
+        mutableStateOf(prefs.getBoolean("video_passthrough_enabled", false))
+    }
     var brightnessLevel by rememberSaveable { mutableIntStateOf(0) }
     var isPlaying by rememberSaveable { mutableStateOf(false) }
     var durationMs by rememberSaveable { mutableLongStateOf(0L) }
@@ -819,7 +829,6 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     // Only block polling during restore if we have a saved position to restore.
     // On fresh launch (positionMs=0), no restore needed — start polling immediately.
     var restored by remember { mutableStateOf(positionMs == 0L) }
-    val prefs = remember { context.getSharedPreferences("cast_ui", Context.MODE_PRIVATE) }
     var isFullscreen by rememberSaveable {
         mutableStateOf(testFullscreen || prefs.getBoolean("fullscreen", false))
     }
@@ -899,6 +908,15 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     fun setHwEncodeEnabled(enabled: Boolean) {
         hwEncodeEnabled = enabled
         backend.setHwEncode(enabled)
+    }
+
+    fun setVideoPassthroughEnabled(enabled: Boolean) {
+        if (selectedUri != null) {
+            pauseBoth()
+        }
+        videoPassthroughEnabled = enabled
+        prefs.edit().putBoolean("video_passthrough_enabled", enabled).apply()
+        backend.setVideoPassthroughEnabled(enabled)
     }
 
     fun setBrightnessLevel(level: Int) {
@@ -1001,6 +1019,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 append(" localMirror=").append(localMirrorEnabled)
                 append(" localSound=").append(localSoundEnabled)
                 append(" hwEncode=").append(hwEncodeEnabled)
+                append(" ptEnabled=").append(videoPassthroughEnabled)
                 append(" viewport=").append(viewport.zoom).append(',').append(viewport.offsetX).append(',').append(viewport.offsetY)
                 append(" backendStatus=").append(backend.status.value)
             },
@@ -1339,6 +1358,10 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         }
     }
 
+    LaunchedEffect(videoPassthroughEnabled) {
+        backend.setVideoPassthroughEnabled(videoPassthroughEnabled)
+    }
+
     val openVideoLauncher = rememberLauncherForActivityResult(OpenDocument()) { uri ->
         if (uri != null) {
             val shouldStartPlaying = if (connectionState == Connection.State.CONNECTED) {
@@ -1592,6 +1615,18 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                     )
                     Text("Local sound", color = Color(0xFFD9E2EC))
                     Spacer(modifier = Modifier.width(12.dp))
+                    Switch(
+                        checked = videoPassthroughEnabled,
+                        onCheckedChange = {
+                            setVideoPassthroughEnabled(it)
+                        },
+                    )
+                    Text("Video PT", color = Color(0xFFD9E2EC))
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     Button(
                         onClick = {
                             viewport = ViewportState()
@@ -1600,6 +1635,15 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                     ) {
                         Text("Reset View")
                     }
+                    Text(
+                        text = if (videoPassthroughEnabled) {
+                            "Passthrough enabled"
+                        } else {
+                            "Passthrough off by default"
+                        },
+                        color = Color(0xFF9CB0C3),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
                 SettingsRow(
                     context,

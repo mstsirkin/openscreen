@@ -354,6 +354,11 @@ void ControllableFileSender::StopCapturers() {
 }
 
 bool ControllableFileSender::CanUseVideoPassthrough() {
+  if (!settings_.enable_video_passthrough) {
+    active_mode_ = "fallback transcode: disabled";
+    return false;
+  }
+
   if (!settings_.should_include_video || settings_.codec != VideoCodec::kH264 ||
       !video_sender_) {
     active_mode_ = "fallback transcode: sender codec";
@@ -745,7 +750,8 @@ std::string ControllableFileSender::GetActiveModeString() const {
 
 std::string ControllableFileSender::GetDebugStateString() const {
   std::ostringstream stream;
-  stream << "pt_active=" << (passthrough_active_ ? 1 : 0)
+  stream << "pt_enabled=" << (settings_.enable_video_passthrough ? 1 : 0)
+         << " pt_active=" << (passthrough_active_ ? 1 : 0)
          << " pt_bp=" << (passthrough_backpressured_ ? 1 : 0)
          << " pt_reentry=" << (passthrough_reentry_pending_ ? 1 : 0)
          << " has_vs=" << (video_sender_ ? 1 : 0)
