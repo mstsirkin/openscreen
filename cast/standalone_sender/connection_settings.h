@@ -62,6 +62,11 @@ struct ConnectionSettings {
   // using a sync test (simultaneous beep + flash). Default 30ms works
   // for most Cast receivers (Google TV).
   Clock::duration av_sync_offset = std::chrono::milliseconds(0);
+
+  // Optional brightness adjustment applied on the CPU transform path.
+  // Range is [-200, 200], with 0 meaning no adjustment. Non-zero brightness
+  // requires transcode rather than passthrough.
+  int brightness = 0;
 };
 
 }  // namespace openscreen::cast

@@ -451,6 +451,11 @@ class NativeBackedBackend : CastControlBackend {
         nativeSetPlayoutDelay(delayMs)
     }
 
+    fun setBrightness(brightness: Int) {
+        nativeSetBrightness(brightness)
+        refreshStatus()
+    }
+
     fun getCastPositionMs(): Long = nativeGetPositionMs()
     fun getCastDurationMs(): Long = nativeGetDurationMs()
     fun isCastPlaying(): Boolean = nativeIsPlaying()
@@ -510,6 +515,7 @@ class NativeBackedBackend : CastControlBackend {
     private external fun nativeIsConnected(): Boolean
     private external fun nativeSetAvSyncOffset(offsetMs: Long)
     private external fun nativeSetHwEncode(enabled: Boolean)
+    private external fun nativeSetBrightness(brightness: Int)
     private external fun nativeTestCast(target: String, filePath: String)
 
     companion object {
@@ -715,6 +721,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var localMirrorEnabled by rememberSaveable { mutableStateOf(true) }
     var localSoundEnabled by rememberSaveable { mutableStateOf(false) }
     var hwEncodeEnabled by rememberSaveable { mutableStateOf(true) }
+    var brightnessLevel by rememberSaveable { mutableIntStateOf(0) }
     var isPlaying by rememberSaveable { mutableStateOf(false) }
     var durationMs by rememberSaveable { mutableLongStateOf(0L) }
     var positionMs by rememberSaveable { mutableLongStateOf(0L) }
@@ -730,6 +737,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var isFullscreen by rememberSaveable {
         mutableStateOf(testFullscreen || prefs.getBoolean("fullscreen", false))
     }
+    var showAdvancedControls by rememberSaveable { mutableStateOf(false) }
     var autoReconnectTargets by remember {
         mutableStateOf(getAutoReconnectTargets(context))
     }
@@ -804,6 +812,12 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     fun setHwEncodeEnabled(enabled: Boolean) {
         hwEncodeEnabled = enabled
         backend.setHwEncode(enabled)
+    }
+
+    fun setBrightnessLevel(level: Int) {
+        val clamped = level.coerceIn(-200, 200)
+        brightnessLevel = clamped
+        backend.setBrightness(clamped)
     }
 
     fun pauseBoth() {
@@ -1264,31 +1278,6 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Text(
-            text = "OpenScreen Control Cast",
-            style = MaterialTheme.typography.headlineMedium,
-            color = Color(0xFFF5F7FA),
-            fontWeight = FontWeight.SemiBold,
-        )
-
-        Text(
-            text = "Build ${BuildConfig.GIT_HEAD} ${BuildConfig.GIT_SUBJECT}",
-            color = Color(0xFF7F93A7),
-            style = MaterialTheme.typography.bodySmall,
-        )
-
-        Text(
-            text = connectionStatusText,
-            color = Color(0xFF9CB0C3),
-            style = MaterialTheme.typography.bodyMedium,
-        )
-
-        Text(
-            text = "Native: $backendStatus",
-            color = Color(0xFF6B7F8E),
-            style = MaterialTheme.typography.bodySmall,
-        )
-
         // Device discovery section
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -1408,52 +1397,104 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 modifier = Modifier.weight(1f),
                 color = Color(0xFFD9E2EC),
             )
-        }
-
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Switch(
-                checked = localMirrorEnabled,
-                onCheckedChange = {
-                    setLocalMirrorEnabled(it)
-                },
-            )
-            Text("Local mirror", color = Color(0xFFD9E2EC))
-            Spacer(modifier = Modifier.width(12.dp))
-            Switch(
-                checked = hwEncodeEnabled,
-                onCheckedChange = {
-                    setHwEncodeEnabled(it)
-                },
-            )
-            Text("HW enc", color = Color(0xFFD9E2EC))
-        }
-
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Switch(
-                checked = localSoundEnabled,
-                onCheckedChange = {
-                    setLocalSoundEnabled(it)
-                },
-            )
-            Text("Local sound", color = Color(0xFFD9E2EC))
-            Spacer(modifier = Modifier.width(12.dp))
             Button(
-                onClick = {
-                    viewport = ViewportState()
-                    backend.updateViewport(viewport)
-                },
+                onClick = { showAdvancedControls = !showAdvancedControls },
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    horizontal = 12.dp,
+                    vertical = 8.dp,
+                ),
             ) {
-                Text("Reset View")
+                Text(if (showAdvancedControls) "−" else "+")
             }
         }
 
-        SettingsRow(context, backend, connectedDevice, coroutineScope)
+        if (showAdvancedControls) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF182028), RoundedCornerShape(12.dp))
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    text = "Build ${BuildConfig.GIT_HEAD} ${BuildConfig.GIT_SUBJECT}",
+                    color = Color(0xFF7F93A7),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    text = connectionStatusText,
+                    color = Color(0xFF9CB0C3),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    text = "Native: $backendStatus",
+                    color = Color(0xFF6B7F8E),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Switch(
+                        checked = localMirrorEnabled,
+                        onCheckedChange = {
+                            setLocalMirrorEnabled(it)
+                        },
+                    )
+                    Text("Local mirror", color = Color(0xFFD9E2EC))
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Switch(
+                        checked = hwEncodeEnabled,
+                        onCheckedChange = {
+                            setHwEncodeEnabled(it)
+                        },
+                    )
+                    Text("HW enc", color = Color(0xFFD9E2EC))
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Switch(
+                        checked = localSoundEnabled,
+                        onCheckedChange = {
+                            setLocalSoundEnabled(it)
+                        },
+                    )
+                    Text("Local sound", color = Color(0xFFD9E2EC))
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Button(
+                        onClick = {
+                            viewport = ViewportState()
+                            backend.updateViewport(viewport)
+                        },
+                    ) {
+                        Text("Reset View")
+                    }
+                }
+                SettingsRow(
+                    context,
+                    backend,
+                    connectedDevice,
+                    coroutineScope,
+                    brightnessLevel,
+                    ::setBrightnessLevel,
+                )
+            }
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = "Brightness ${if (brightnessLevel > 0) "+" else ""}$brightnessLevel",
+                    color = Color(0xFFD9E2EC),
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                Slider(
+                    value = brightnessLevel.toFloat(),
+                    onValueChange = { setBrightnessLevel(it.toInt()) },
+                    valueRange = -200f..200f,
+                )
+            }
+        }
 
         if (localMirrorEnabled) {
             Box(
@@ -1561,80 +1602,96 @@ private fun SettingsRow(
     backend: NativeBackedBackend,
     connectedDevice: CastDevice?,
     coroutineScope: kotlinx.coroutines.CoroutineScope,
+    brightnessLevel: Int,
+    onBrightnessChange: (Int) -> Unit,
 ) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        var bufferText by rememberSaveable { mutableStateOf("400") }
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("Buffer", color = Color(0xFF6B7F8E), style = MaterialTheme.typography.labelSmall)
-            androidx.compose.material3.OutlinedTextField(
-                value = bufferText,
-                onValueChange = { new ->
-                    bufferText = new.filter { it.isDigit() }
-                    bufferText.toIntOrNull()?.let { backend.setPlayoutDelay(it) }
-                },
-                modifier = Modifier.width(80.dp),
-                textStyle = androidx.compose.ui.text.TextStyle(
-                    color = Color(0xFFD9E2EC),
-                    fontSize = 14.sp,
-                ),
-                singleLine = true,
-            )
-            Text("ms", color = Color(0xFF6B7F8E), style = MaterialTheme.typography.labelSmall)
-        }
-        var offsetText by rememberSaveable { mutableStateOf("0") }
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("A/V sync", color = Color(0xFF6B7F8E), style = MaterialTheme.typography.labelSmall)
-            androidx.compose.material3.OutlinedTextField(
-                value = offsetText,
-                onValueChange = { new ->
-                    offsetText = new.filter { it.isDigit() || it == '-' }
-                    offsetText.toLongOrNull()?.let { backend.setAvSyncOffset(it) }
-                },
-                modifier = Modifier.width(80.dp),
-                textStyle = androidx.compose.ui.text.TextStyle(
-                    color = Color(0xFFD9E2EC),
-                    fontSize = 14.sp,
-                ),
-                singleLine = true,
-            )
-            Text("ms", color = Color(0xFF6B7F8E), style = MaterialTheme.typography.labelSmall)
-        }
-        val activity = context as? MainActivity
-        var calibrating by remember { mutableStateOf(false) }
-        Button(
-            onClick = {
-                if (activity == null) return@Button
-                val calibrator = AvSyncCalibrator(context)
-                if (!calibrator.hasPermissions()) {
-                    activity.requestCalibrationPermissions()
-                    return@Button
-                }
-                calibrating = true
-                val syncFile = java.io.File(context.cacheDir, "sync_test.mp4")
-                if (!syncFile.exists()) {
-                    context.resources.openRawResource(R.raw.sync_test).use { input ->
-                        syncFile.outputStream().use { output -> input.copyTo(output) }
-                    }
-                }
-                val target = connectedDevice?.target ?: ""
-                backend.testCast(target, syncFile.absolutePath)
-                coroutineScope.launch {
-                    delay(3000)
-                    val result = calibrator.calibrate(activity)
-                    calibrating = false
-                    Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
-                    if (result.numSamples > 0) {
-                        offsetText = result.offsetMs.toString()
-                        backend.setAvSyncOffset(result.offsetMs)
-                    }
-                }
-            },
-            enabled = !calibrating,
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(if (calibrating) "..." else "Cal")
+            var bufferText by rememberSaveable { mutableStateOf("400") }
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("Buffer", color = Color(0xFF6B7F8E), style = MaterialTheme.typography.labelSmall)
+                androidx.compose.material3.OutlinedTextField(
+                    value = bufferText,
+                    onValueChange = { new ->
+                        bufferText = new.filter { it.isDigit() }
+                        bufferText.toIntOrNull()?.let { backend.setPlayoutDelay(it) }
+                    },
+                    modifier = Modifier.width(80.dp),
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        color = Color(0xFFD9E2EC),
+                        fontSize = 14.sp,
+                    ),
+                    singleLine = true,
+                )
+                Text("ms", color = Color(0xFF6B7F8E), style = MaterialTheme.typography.labelSmall)
+            }
+            var offsetText by rememberSaveable { mutableStateOf("0") }
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("A/V sync", color = Color(0xFF6B7F8E), style = MaterialTheme.typography.labelSmall)
+                androidx.compose.material3.OutlinedTextField(
+                    value = offsetText,
+                    onValueChange = { new ->
+                        offsetText = new.filter { it.isDigit() || it == '-' }
+                        offsetText.toLongOrNull()?.let { backend.setAvSyncOffset(it) }
+                    },
+                    modifier = Modifier.width(80.dp),
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        color = Color(0xFFD9E2EC),
+                        fontSize = 14.sp,
+                    ),
+                    singleLine = true,
+                )
+                Text("ms", color = Color(0xFF6B7F8E), style = MaterialTheme.typography.labelSmall)
+            }
+            val activity = context as? MainActivity
+            var calibrating by remember { mutableStateOf(false) }
+            Button(
+                onClick = {
+                    if (activity == null) return@Button
+                    val calibrator = AvSyncCalibrator(context)
+                    if (!calibrator.hasPermissions()) {
+                        activity.requestCalibrationPermissions()
+                        return@Button
+                    }
+                    calibrating = true
+                    val syncFile = java.io.File(context.cacheDir, "sync_test.mp4")
+                    if (!syncFile.exists()) {
+                        context.resources.openRawResource(R.raw.sync_test).use { input ->
+                            syncFile.outputStream().use { output -> input.copyTo(output) }
+                        }
+                    }
+                    val target = connectedDevice?.target ?: ""
+                    backend.testCast(target, syncFile.absolutePath)
+                    coroutineScope.launch {
+                        delay(3000)
+                        val result = calibrator.calibrate(activity)
+                        calibrating = false
+                        Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                        if (result.numSamples > 0) {
+                            offsetText = result.offsetMs.toString()
+                            backend.setAvSyncOffset(result.offsetMs)
+                        }
+                    }
+                },
+                enabled = !calibrating,
+            ) {
+                Text(if (calibrating) "..." else "Cal")
+            }
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                text = "Brightness ${if (brightnessLevel > 0) "+" else ""}$brightnessLevel",
+                color = Color(0xFFD9E2EC),
+                style = MaterialTheme.typography.labelMedium,
+            )
+            Slider(
+                value = brightnessLevel.toFloat(),
+                onValueChange = { onBrightnessChange(it.toInt()) },
+                valueRange = -200f..200f,
+            )
         }
     }
 }

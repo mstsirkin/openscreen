@@ -54,6 +54,7 @@ class ControllableFileCastAgent final
   void SetViewport(const VideoViewport& viewport);
   void ResetViewport();
   void SetAvSyncOffset(Clock::duration offset);
+  void SetBrightness(int brightness);
   Clock::duration GetCurrentPosition() const;
   Clock::duration GetDuration() const;
   bool IsConnected() const;

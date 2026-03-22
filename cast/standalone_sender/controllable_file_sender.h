@@ -54,6 +54,7 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
   void SetViewport(const VideoViewport& viewport);
   void ResetViewport();
   void SetAvSyncOffset(Clock::duration offset);
+  void SetBrightness(int brightness);
 
   Clock::duration GetCurrentPosition() const;
   Clock::duration GetDuration() const;
@@ -126,6 +127,8 @@ class ControllableFileSender final : public SimulatedAudioCapturer::Client,
                             int src_h,
                             int dst_x,
                             int dst_y);
+  static uint8_t ApplyBrightnessToLuma(uint8_t value, int brightness);
+  void CopyLumaIntoPadded(int dst_x, int dst_y, int width, int height);
 
   Environment& env_;
   ConnectionSettings settings_;

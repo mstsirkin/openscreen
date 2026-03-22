@@ -174,6 +174,13 @@ void ControllableFileSender::SetAvSyncOffset(Clock::duration offset) {
   settings_.av_sync_offset = offset;
 }
 
+void ControllableFileSender::SetBrightness(int brightness) {
+  settings_.brightness = std::clamp(brightness, -200, 200);
+  if (passthrough_active_ && settings_.brightness != 0) {
+    FallbackToTranscode("brightness", GetCurrentPosition(), is_playing_);
+  }
+}
+
 Clock::duration ControllableFileSender::GetCurrentPosition() const {
   if (!is_playing_) {
     return last_known_position_;
@@ -345,6 +352,7 @@ bool ControllableFileSender::CanUseVideoPassthrough() {
 bool ControllableFileSender::CanStartVideoPassthroughAt(
     Clock::duration position) const {
   return settings_.should_include_video && can_passthrough_video_ &&
+         settings_.brightness == 0 &&
          (video_sender_ || video_encoder_) &&
          IsViewportIdentity() &&
          (media_duration_ <= Clock::duration::zero() || position < media_duration_);
@@ -855,10 +863,7 @@ void ControllableFileSender::PrepareBaseVideoFrame(
             scaled_strides);
 
   if (rotation == 0) {
-    for (int row = 0; row < scale_dst_h; ++row) {
-      std::memcpy(padded_y_.data() + (y_off + row) * kDisplayWidth + x_off,
-                  scaled_y_.data() + row * scale_dst_w, scale_dst_w);
-    }
+    CopyLumaIntoPadded(x_off, y_off, scale_dst_w, scale_dst_h);
     for (int row = 0; row < scale_dst_h / 2; ++row) {
       std::memcpy(padded_u_.data() + (y_off / 2 + row) * (kDisplayWidth / 2) +
                       x_off / 2,
@@ -893,27 +898,36 @@ void ControllableFileSender::RotateI420IntoPadded(int rotation_degrees,
                           int width,
                           int height,
                           uint8_t* dst,
-                          int dst_stride) {
+                          int dst_stride,
+                          bool apply_brightness) {
     switch (rotation_degrees) {
       case 90:
         for (int y = 0; y < height; ++y) {
           for (int x = 0; x < width; ++x) {
-            dst[x * dst_stride + (height - 1 - y)] = src[y * src_stride + x];
+            const uint8_t value = src[y * src_stride + x];
+            dst[x * dst_stride + (height - 1 - y)] =
+                apply_brightness ? ApplyBrightnessToLuma(value, settings_.brightness)
+                                 : value;
           }
         }
         break;
       case 180:
         for (int y = 0; y < height; ++y) {
           for (int x = 0; x < width; ++x) {
+            const uint8_t value = src[y * src_stride + x];
             dst[(height - 1 - y) * dst_stride + (width - 1 - x)] =
-                src[y * src_stride + x];
+                apply_brightness ? ApplyBrightnessToLuma(value, settings_.brightness)
+                                 : value;
           }
         }
         break;
       case 270:
         for (int y = 0; y < height; ++y) {
           for (int x = 0; x < width; ++x) {
-            dst[(width - 1 - x) * dst_stride + y] = src[y * src_stride + x];
+            const uint8_t value = src[y * src_stride + x];
+            dst[(width - 1 - x) * dst_stride + y] =
+                apply_brightness ? ApplyBrightnessToLuma(value, settings_.brightness)
+                                 : value;
           }
         }
         break;
@@ -927,11 +941,48 @@ void ControllableFileSender::RotateI420IntoPadded(int rotation_degrees,
       padded_u_.data() + (dst_y_offset / 2) * (kDisplayWidth / 2) + dst_x / 2;
   uint8_t* dst_v =
       padded_v_.data() + (dst_y_offset / 2) * (kDisplayWidth / 2) + dst_x / 2;
-  rotate_plane(scaled_y_.data(), src_w, src_w, src_h, dst_y, kDisplayWidth);
+  rotate_plane(scaled_y_.data(), src_w, src_w, src_h, dst_y, kDisplayWidth,
+               true);
   rotate_plane(scaled_u_.data(), src_w / 2, src_w / 2, src_h / 2, dst_u,
-               kDisplayWidth / 2);
+               kDisplayWidth / 2, false);
   rotate_plane(scaled_v_.data(), src_w / 2, src_w / 2, src_h / 2, dst_v,
-               kDisplayWidth / 2);
+               kDisplayWidth / 2, false);
+}
+
+uint8_t ControllableFileSender::ApplyBrightnessToLuma(uint8_t value,
+                                                      int brightness) {
+  if (brightness == 0) {
+    return value;
+  }
+  // Softpop mapping:
+  // - positive values lift luma and add mild contrast to avoid a foggy look
+  // - negative values darken and slightly soften contrast
+  // Top end is tuned so +200 is close to the preferred reference
+  // (brightness ~= 0.20, contrast ~= 1.30).
+  const int offset = brightness * 51 / 200;
+  const int contrast_q8 =
+      brightness >= 0 ? 256 + (brightness * 120 / 200)
+                      : 256 + (brightness * 40 / 200);
+  const int centered = static_cast<int>(value) - 128;
+  const int scaled = 128 + ((centered * contrast_q8 + 128) >> 8);
+  return static_cast<uint8_t>(std::clamp(scaled + offset, 0, 255));
+}
+
+void ControllableFileSender::CopyLumaIntoPadded(int dst_x,
+                                                int dst_y,
+                                                int width,
+                                                int height) {
+  for (int row = 0; row < height; ++row) {
+    uint8_t* dst = padded_y_.data() + (dst_y + row) * kDisplayWidth + dst_x;
+    const uint8_t* src = scaled_y_.data() + row * width;
+    if (settings_.brightness == 0) {
+      std::memcpy(dst, src, width);
+      continue;
+    }
+    for (int col = 0; col < width; ++col) {
+      dst[col] = ApplyBrightnessToLuma(src[col], settings_.brightness);
+    }
+  }
 }
 
 void ControllableFileSender::ApplyViewportTransform(

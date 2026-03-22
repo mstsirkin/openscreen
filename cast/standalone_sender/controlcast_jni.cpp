@@ -75,6 +75,7 @@ struct ControllerState {
   int video_fd2 = -1;
   std::string video_path;
   bool use_hw_encode = true;
+  int brightness = 0;
   long long av_sync_offset_ms = 0;
   int playout_delay_ms = 400;
   std::string active_mode = "idle";
@@ -295,10 +296,12 @@ void StartCastSessionOnTaskRunner(ControllerState& state,
       std::chrono::milliseconds(state.av_sync_offset_ms);
   settings.playout_delay =
       std::chrono::milliseconds(state.playout_delay_ms);
+  settings.brightness = std::clamp(state.brightness, -200, 200);
 
-  LOGI("TaskRunner: connecting buf=%dms avsync=%lldms file=%s",
+  LOGI("TaskRunner: connecting buf=%dms avsync=%lldms brightness=%d file=%s",
        state.playout_delay_ms,
        (long long)state.av_sync_offset_ms,
+       state.brightness,
        video_path.c_str());
   state.connection.cast->Connect(std::move(settings));
   LOGI("TaskRunner: connect initiated");
@@ -831,6 +834,29 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeSetHwEncode(
   std::lock_guard<std::mutex> lock(state.mutex);
   state.use_hw_encode = enabled == JNI_TRUE;
   LOGI("Hardware encoding %s", state.use_hw_encode ? "enabled" : "disabled");
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_org_openscreen_controlcast_NativeBackedBackend_nativeSetBrightness(
+    JNIEnv* env,
+    jobject thiz,
+    jint brightness) {
+  auto& state = State();
+  const int clamped = std::clamp(static_cast<int>(brightness), -200, 200);
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.brightness = clamped;
+  }
+  LOGI("Brightness set to %d", clamped);
+#ifdef HAVE_OPENSCREEN
+  if (state.connection.cast && state.task_runner) {
+    state.task_runner->PostTask([&state, clamped]() {
+      if (state.connection.cast) {
+        state.connection.cast->SetBrightness(clamped);
+      }
+    });
+  }
+#endif
 }
 
 extern "C" JNIEXPORT void JNICALL

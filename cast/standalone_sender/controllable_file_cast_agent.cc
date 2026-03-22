@@ -177,6 +177,15 @@ void ControllableFileCastAgent::SetAvSyncOffset(Clock::duration offset) {
   }
 }
 
+void ControllableFileCastAgent::SetBrightness(int brightness) {
+  if (connection_settings_) {
+    connection_settings_->brightness = std::clamp(brightness, -200, 200);
+  }
+  if (sender_) {
+    sender_->SetBrightness(brightness);
+  }
+}
+
 void ControllableFileCastAgent::OnConnected(SenderSocketFactory* factory,
                                             const IPEndpoint& endpoint,
                                             std::unique_ptr<CastSocket> socket) {
