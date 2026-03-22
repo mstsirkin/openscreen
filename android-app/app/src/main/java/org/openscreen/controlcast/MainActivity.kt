@@ -298,6 +298,7 @@ class NativeBackedBackend : CastControlBackend {
     private val mutableStatus =
         kotlinx.coroutines.flow.MutableStateFlow("Native backend loaded.")
     override val status: kotlinx.coroutines.flow.StateFlow<String> = mutableStatus
+    private val stateListeners = mutableSetOf<(Boolean, Boolean, String) -> Unit>()
 
     init {
         nativeInit()
@@ -475,13 +476,31 @@ class NativeBackedBackend : CastControlBackend {
         refreshStatus()
     }
 
+    fun addStateListener(listener: (Boolean, Boolean, String) -> Unit) {
+        stateListeners += listener
+        val statusText = mutableStatus.value
+        listener(
+            nativeIsConnected() || statusText.startsWith("Connected to "),
+            nativeIsPlaying(),
+            statusText,
+        )
+    }
+
+    fun removeStateListener(listener: (Boolean, Boolean, String) -> Unit) {
+        stateListeners -= listener
+    }
+
     override fun setMirrorLocally(enabled: Boolean) {
         nativeSetMirrorLocally(enabled)
         refreshStatus()
     }
 
     private fun refreshStatus() {
-        mutableStatus.value = nativeGetStatus()
+        val statusText = nativeGetStatus()
+        mutableStatus.value = statusText
+        val connected = nativeIsConnected() || statusText.startsWith("Connected to ")
+        val playing = nativeIsPlaying()
+        stateListeners.toList().forEach { it(connected, playing, statusText) }
     }
 
     private external fun nativeInit()
@@ -545,6 +564,27 @@ class Connection(private val backend: NativeBackedBackend) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var monitorJob: Job? = null
+    private val nativeStateListener: (Boolean, Boolean, String) -> Unit =
+        { connected, _, statusText ->
+            if (connected) {
+                state = State.CONNECTED
+                lastError = 0
+                if (target == null) {
+                    parseConnectedTarget(statusText)?.let { recoveredTarget ->
+                        target = debugTargetToCastDevice(recoveredTarget)
+                    }
+                }
+            } else if (target != null && state == State.CONNECTING) {
+                state = State.CONNECTING
+            } else if (target == null) {
+                state = State.DISCONNECTED
+            }
+        }
+
+    init {
+        backend.addStateListener(nativeStateListener)
+        startMonitoring()
+    }
 
     private fun startMonitoring() {
         monitorJob?.cancel()
@@ -583,7 +623,6 @@ class Connection(private val backend: NativeBackedBackend) {
             state = State.CONNECTED
             lastError = 0
         }
-        startMonitoring()
         return result
     }
 
@@ -598,6 +637,7 @@ class Connection(private val backend: NativeBackedBackend) {
 
     fun dispose() {
         monitorJob?.cancel()
+        backend.removeStateListener(nativeStateListener)
         scope.cancel()
     }
 
@@ -641,6 +681,12 @@ class Connection(private val backend: NativeBackedBackend) {
 
     val status: kotlinx.coroutines.flow.StateFlow<String>
         get() = backend.status
+
+    private fun parseConnectedTarget(statusText: String): String? {
+        val prefix = "Connected to "
+        if (!statusText.startsWith(prefix)) return null
+        return statusText.removePrefix(prefix).substringBefore(" |").ifBlank { null }
+    }
 }
 
 private fun getAutoReconnectTargets(context: Context): Set<String> {
