@@ -45,6 +45,7 @@ Sender::Sender(Environment& environment,
   OSP_CHECK_GT(rtp_timebase_, 0);
   OSP_CHECK_GT(target_playout_delay_, milliseconds::zero());
 
+  session_start_time_ = environment.now();
   pending_sender_report_.reference_time = SenderPacketRouter::kNever;
 
   packet_router_.OnSenderCreated(rtcp_session_.receiver_ssrc(), this);
@@ -323,10 +324,21 @@ void Sender::OnReceiverReferenceTimeAdvanced(Clock::time_point reference_time) {
 void Sender::OnReceiverReport(const RtcpReportBlock& receiver_report) {
   OSP_CHECK_NE(rtcp_packet_arrival_time_, SenderPacketRouter::kNever);
 
-  const Clock::duration total_delay =
-      rtcp_packet_arrival_time_ -
+  const Clock::time_point sender_report_time =
       sender_report_builder_.GetRecentReportTime(
           receiver_report.last_status_report_id, rtcp_packet_arrival_time_);
+  if (sender_report_time < session_start_time_ ||
+      sender_report_time > rtcp_packet_arrival_time_) {
+    OSP_LOG_WARN << "Ignoring stale receiver report for status report id "
+                 << receiver_report.last_status_report_id
+                 << " because it reconstructs to " << sender_report_time
+                 << " outside sender lifetime [" << session_start_time_ << ", "
+                 << rtcp_packet_arrival_time_ << "].";
+    return;
+  }
+
+  const Clock::duration total_delay =
+      rtcp_packet_arrival_time_ - sender_report_time;
   const auto non_network_delay =
       Clock::to_duration(receiver_report.delay_since_last_report);
 

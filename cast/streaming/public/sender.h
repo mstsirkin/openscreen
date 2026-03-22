@@ -322,6 +322,10 @@ class Sender final : public SenderPacketRouter::Sender,
   // The exact arrival time of the last RTCP packet.
   Clock::time_point rtcp_packet_arrival_time_ = SenderPacketRouter::kNever;
 
+  // The creation time of this Sender instance. Used to reject stale RTCP
+  // feedback that references sender reports from an earlier session.
+  Clock::time_point session_start_time_ = Clock::time_point::min();
+
   // The near-term average round trip time. This is updated with each Sender
   // Report → Receiver Report round trip. This is initially zero, indicating the
   // round trip time has not been measured yet.
