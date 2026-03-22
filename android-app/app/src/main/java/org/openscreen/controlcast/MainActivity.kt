@@ -1066,16 +1066,12 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         val mediaItem = MediaItem.fromUri(uri)
         exoPlayer.setMediaItem(mediaItem)
         exoPlayer.prepare()
-        if (localMirrorEnabled && shouldStartPlaying &&
-            connectionState == Connection.State.CONNECTED
-        ) {
-            exoPlayer.play()
-        } else {
-            exoPlayer.pause()
-        }
-        isPlaying = shouldStartPlaying
+        // Intent-driven opens must not let local preview run ahead of Cast.
+        // Keep local paused and wait for the Cast session to become authoritative.
+        exoPlayer.pause()
+        isPlaying = false
         if (connectionState == Connection.State.CONNECTED) {
-            openSelectedVideoOnCast(uri, shouldStartPlaying)
+            openSelectedVideoOnCast(uri, shouldStartPlaying, startPositionMs = 0L)
         }
     }
 

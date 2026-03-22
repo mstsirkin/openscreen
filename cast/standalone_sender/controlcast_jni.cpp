@@ -68,6 +68,8 @@ struct ControllerState {
   bool playing = false;
   bool desired_playing = false;
   long long position_ms = 0;
+  long long pending_open_position_ms = 0;
+  bool has_pending_open_position = false;
   float zoom = 1.0f;
   float offset_x = 0.0f;
   float offset_y = 0.0f;
@@ -197,7 +199,13 @@ void StartCastSessionOnTaskRunner(ControllerState& state,
   float offset_y = 0.0f;
   {
     std::lock_guard<std::mutex> lock(state.mutex);
-    position_ms = state.position_ms;
+    if (state.has_pending_open_position) {
+      position_ms = state.pending_open_position_ms;
+      state.position_ms = state.pending_open_position_ms;
+      state.has_pending_open_position = false;
+    } else {
+      position_ms = state.position_ms;
+    }
     playing = state.desired_playing;
     zoom = state.zoom;
     offset_x = state.offset_x;
@@ -564,6 +572,8 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeOpenVideo(
     state.video_uri = JStringToStdString(env, uri);
     state.mirror_locally = mirror_locally == JNI_TRUE;
     state.position_ms = std::max<long long>(0, start_position_ms);
+    state.pending_open_position_ms = state.position_ms;
+    state.has_pending_open_position = true;
     state.connection.reconnect_enabled = true;
 
     if (fd1 >= 0 && fd2 >= 0) {
@@ -617,6 +627,8 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeOpenVideoPath(
     state.video_uri = JStringToStdString(env, uri);
     state.mirror_locally = mirror_locally == JNI_TRUE;
     state.position_ms = std::max<long long>(0, start_position_ms);
+    state.pending_open_position_ms = state.position_ms;
+    state.has_pending_open_position = true;
     state.video_path = JStringToStdString(env, file_path);
     state.connection.reconnect_enabled = true;
     target_str = state.connection.target;
@@ -965,9 +977,13 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeGetStatus(
   if (state.connection.cast) {
     state.connection.connected = state.connection.cast->IsConnected();
     state.playing = state.connection.connected && state.connection.cast->IsPlaying();
-    state.position_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            state.connection.cast->GetCurrentPosition())
-                            .count();
+    if (state.has_pending_open_position) {
+      state.position_ms = state.pending_open_position_ms;
+    } else {
+      state.position_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              state.connection.cast->GetCurrentPosition())
+                              .count();
+    }
     state.active_mode = state.connection.cast->GetActiveModeString();
     state.debug_state = state.connection.cast->GetDebugStateString();
     UpdateStatusLocked(state);
