@@ -954,18 +954,20 @@ uint8_t ControllableFileSender::ApplyBrightnessToLuma(uint8_t value,
   if (brightness == 0) {
     return value;
   }
-  // Softpop mapping:
-  // - positive values lift luma and add mild contrast to avoid a foggy look
-  // - negative values darken and slightly soften contrast
-  // Top end is tuned so +200 is close to the preferred reference
-  // (brightness ~= 0.20, contrast ~= 1.30).
-  const int offset = brightness * 51 / 200;
-  const int contrast_q8 =
-      brightness >= 0 ? 256 + (brightness * 120 / 200)
-                      : 256 + (brightness * 40 / 200);
+  // Use an FFmpeg-eq-style luma transform in fixed-point:
+  //   out = (in - 128) * contrast + 128 + brightness * 255
+  // The UI still exposes a single slider, so we map it to a coupled
+  // brightness/contrast pair tuned for this pipeline:
+  //   +200 -> brightness ~= +0.20, contrast ~= 1.30
+  //   -200 -> brightness ~= -0.20, contrast ~= 0.85
+  const int brightness_offset = brightness * 255 / 1000;
+  const int contrast_q10 =
+      brightness >= 0 ? 1024 + (brightness * 307 / 200)
+                      : 1024 + (brightness * 174 / 200);
   const int centered = static_cast<int>(value) - 128;
-  const int scaled = 128 + ((centered * contrast_q8 + 128) >> 8);
-  return static_cast<uint8_t>(std::clamp(scaled + offset, 0, 255));
+  const int scaled = 128 + ((centered * contrast_q10 + 512) >> 10);
+  return static_cast<uint8_t>(
+      std::clamp(scaled + brightness_offset, 0, 255));
 }
 
 void ControllableFileSender::CopyLumaIntoPadded(int dst_x,
