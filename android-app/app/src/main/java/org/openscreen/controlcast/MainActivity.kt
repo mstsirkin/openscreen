@@ -385,9 +385,9 @@ class NativeBackedBackend : CastControlBackend {
             openPfd1 = null
             openPfd2 = null
 
-            // Prefer fd-backed access for shared/external media. Some Android
-            // devices expose a readable path to Java but native ffmpeg still gets
-            // EACCES on direct open under scoped storage.
+            // Only file:// URIs are safe to pass through as raw native paths.
+            // Shared media and picker/share intents normally arrive as
+            // content:// URIs and should stay on the fd-backed path.
             val filePath = resolveFilePath(context, uri)
             if (filePath != null) {
                 nativeOpenVideoPath(
@@ -430,21 +430,6 @@ class NativeBackedBackend : CastControlBackend {
         if (uri.scheme == "file") {
             val path = uri.path ?: return null
             return path.takeIf { isNativeDirectPathSafe(context, it) }
-        }
-        if (uri.scheme != "content") return null
-        val cursor = context.contentResolver.query(
-            uri, arrayOf(android.provider.MediaStore.MediaColumns.DATA),
-            null, null, null)
-        cursor?.use {
-            if (it.moveToFirst()) {
-                val path = it.getString(0)
-                if (!path.isNullOrEmpty() &&
-                    java.io.File(path).canRead() &&
-                    isNativeDirectPathSafe(context, path)
-                ) {
-                    return path
-                }
-            }
         }
         return null
     }
