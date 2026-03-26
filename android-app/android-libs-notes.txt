@@ -9,17 +9,59 @@ Versions
 - libvpx 1.16.0
 - opus 1.6.1
 
-FFmpeg features
-- The Android FFmpeg build has to enable libavfilter.
-- The Android FFmpeg build has to enable these filters:
-  buffer, buffersink, scale, pad, transpose, eq
-- In FFmpeg 7.1, enabling eq requires --enable-gpl.
-
 Known-good combo
 - Commit c61c47a154a51b9d5c24a9bcc341e02829741488 works well with:
   FFmpeg 7.1
   libvpx 1.16.0
   opus 1.6.1
+
+FFmpeg configure flags before the FFmpeg video-transform switch
+- --disable-shared
+- --enable-static
+- --disable-programs
+- --disable-doc
+- --disable-debug
+- --disable-everything
+- --enable-avcodec
+- --enable-avformat
+- --enable-avutil
+- --enable-swresample
+- --enable-swscale
+- --enable-protocol=file
+- --enable-demuxer=mov,matroska
+- --enable-parser=aac,h264,hevc,vp8,vp9,av1,opus
+- --enable-decoder=aac,h264,hevc,vp8,vp9,av1,opus,mjpeg,png
+- --enable-bsfs
+- --enable-bsf=aac_adtstoasc,h264_mp4toannexb,hevc_mp4toannexb
+- --enable-zlib
+- --extra-cflags="-fPIC -mbranch-protection=standard"
+- --extra-cxxflags="-fPIC -mbranch-protection=standard"
+- --extra-ldflags="-fPIC -mbranch-protection=standard"
+
+FFmpeg configure flags used for the FFmpeg video-transform switch
+- --disable-shared
+- --enable-static
+- --disable-programs
+- --disable-doc
+- --disable-debug
+- --enable-avcodec
+- --enable-avformat
+- --enable-avutil
+- --enable-avfilter
+- --enable-swresample
+- --enable-swscale
+- --enable-protocol=file
+- --enable-demuxer=mov,matroska
+- --enable-parser=aac,h264,hevc,vp8,vp9,av1,opus
+- --enable-decoder=aac,h264,hevc,vp8,vp9,av1,opus,mjpeg,png
+- --enable-bsfs
+- --enable-bsf=aac_adtstoasc,h264_mp4toannexb,hevc_mp4toannexb
+- --enable-filter=buffer,buffersink,scale,pad,transpose,eq,format
+- --enable-zlib
+- --enable-gpl
+- --extra-cflags="-fPIC -mbranch-protection=standard"
+- --extra-cxxflags="-fPIC -mbranch-protection=standard"
+- --extra-ldflags="-fPIC -mbranch-protection=standard"
 
 Hardening
 - Android arm64 builds in this tree use arm_control_flow_integrity = "standard"
@@ -31,7 +73,7 @@ Hardening
 Checks
 - readelf -n <stable-prefix>/prefix/lib/libvpx.a
 - readelf -n <stable-prefix>/prefix/lib/libavcodec.a
-- rg "CONFIG_(EQ|PAD|SCALE|TRANSPOSE)_FILTER" <ffmpeg-build>/config_components.h
+- rg "CONFIG_(EQ|FORMAT|PAD|SCALE|TRANSPOSE)_FILTER" <ffmpeg-build>/config_components.h
 
 Usage
 - The prefix is the install location for the external Android libs.
