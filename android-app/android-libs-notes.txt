@@ -9,6 +9,12 @@ Versions
 - libvpx 1.16.0
 - opus 1.6.1
 
+FFmpeg features
+- The Android FFmpeg build has to enable libavfilter.
+- The Android FFmpeg build has to enable these filters:
+  buffer, buffersink, scale, pad, transpose, eq
+- In FFmpeg 7.1, enabling eq requires --enable-gpl.
+
 Known-good combo
 - Commit c61c47a154a51b9d5c24a9bcc341e02829741488 works well with:
   FFmpeg 7.1
@@ -25,6 +31,7 @@ Hardening
 Checks
 - readelf -n <stable-prefix>/prefix/lib/libvpx.a
 - readelf -n <stable-prefix>/prefix/lib/libavcodec.a
+- rg "CONFIG_(EQ|PAD|SCALE|TRANSPOSE)_FILTER" <ffmpeg-build>/config_components.h
 
 Usage
 - The prefix is the install location for the external Android libs.
