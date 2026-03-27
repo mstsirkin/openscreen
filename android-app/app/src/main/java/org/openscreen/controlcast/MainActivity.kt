@@ -20,6 +20,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts.GetContent
 import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
+import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -194,6 +196,7 @@ private fun displayNameForUri(context: Context, uri: Uri?): String {
 private enum class VideoPickerMode {
     DOCUMENTS,
     GALLERY,
+    MODERN,
 }
 
 private fun videoPickerModeFromPref(raw: String?): VideoPickerMode {
@@ -1487,10 +1490,18 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         handlePickedVideo(uri, persistable = false)
     }
 
+    val pickVisualMediaLauncher = rememberLauncherForActivityResult(
+        PickVisualMedia(),
+    ) { uri ->
+        handlePickedVideo(uri, persistable = false)
+    }
+
     fun launchVideoPicker() {
         when (videoPickerMode) {
             VideoPickerMode.DOCUMENTS -> openDocumentVideoLauncher.launch(arrayOf("video/*"))
             VideoPickerMode.GALLERY -> getContentVideoLauncher.launch("video/*")
+            VideoPickerMode.MODERN ->
+                pickVisualMediaLauncher.launch(PickVisualMediaRequest(PickVisualMedia.VideoOnly))
         }
     }
 
@@ -1696,21 +1707,38 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Switch(
-                        checked = videoPickerMode == VideoPickerMode.GALLERY,
-                        onCheckedChange = {
+                    Text(
+                        text = "Picker",
+                        color = Color(0xFFD9E2EC),
+                        modifier = Modifier.width(120.dp),
+                    )
+                    Button(
+                        onClick = {
                             setVideoPickerMode(
-                                if (it) VideoPickerMode.GALLERY else VideoPickerMode.DOCUMENTS,
+                                when (videoPickerMode) {
+                                    VideoPickerMode.DOCUMENTS -> VideoPickerMode.GALLERY
+                                    VideoPickerMode.GALLERY -> VideoPickerMode.MODERN
+                                    VideoPickerMode.MODERN -> VideoPickerMode.DOCUMENTS
+                                },
                             )
                         },
-                    )
+                    ) {
+                        Text(
+                            when (videoPickerMode) {
+                                VideoPickerMode.DOCUMENTS -> "Documents"
+                                VideoPickerMode.GALLERY -> "Gallery"
+                                VideoPickerMode.MODERN -> "Modern"
+                            },
+                        )
+                    }
                     Text(
-                        text = if (videoPickerMode == VideoPickerMode.GALLERY) {
-                            "Picker: Gallery"
-                        } else {
-                            "Picker: Documents"
+                        text = when (videoPickerMode) {
+                            VideoPickerMode.DOCUMENTS -> "Persistable"
+                            VideoPickerMode.GALLERY -> "GET_CONTENT"
+                            VideoPickerMode.MODERN -> "Photo Picker"
                         },
-                        color = Color(0xFFD9E2EC),
+                        color = Color(0xFF9CB0C3),
+                        style = MaterialTheme.typography.bodySmall,
                     )
                 }
                 Row(
