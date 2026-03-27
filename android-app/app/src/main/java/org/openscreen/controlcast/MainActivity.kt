@@ -88,7 +88,8 @@ sealed interface DebugCommand {
     data class Connect(val target: String) : DebugCommand
     data object Disconnect : DebugCommand
     data class OpenVideo(
-        val uri: Uri,
+        val uri: Uri?,
+        val filePath: String?,
         val startPlaying: Boolean,
         val startPositionMs: Long,
     ) : DebugCommand
@@ -119,14 +120,18 @@ private fun Intent.toDebugCommand(): DebugCommand? {
             getStringExtra("target")?.takeIf { it.isNotBlank() }?.let(DebugCommand::Connect)
         "org.openscreen.controlcast.DEBUG_DISCONNECT" -> DebugCommand.Disconnect
         "org.openscreen.controlcast.DEBUG_OPEN_VIDEO" -> {
+            val filePath = getStringExtra("file_path")?.trim()?.takeIf { it.isNotEmpty() }
             val uri = data ?: getParcelableExtra(Intent.EXTRA_STREAM)
                 ?: getStringExtra("uri")?.let(Uri::parse)
-            uri?.let {
+            if (uri != null || filePath != null) {
                 DebugCommand.OpenVideo(
-                    uri = it,
+                    uri = uri,
+                    filePath = filePath,
                     startPlaying = getBooleanExtra("start_playing", false),
                     startPositionMs = getLongExtra("start_position_ms", 0L),
                 )
+            } else {
+                null
             }
         }
         "org.openscreen.controlcast.DEBUG_PLAY" -> DebugCommand.Play
@@ -330,6 +335,13 @@ interface CastControlBackend {
         startPositionMs: Long = 0L,
         startPlaying: Boolean = false,
     )
+    fun openVideoDebugPath(
+        context: Context,
+        filePath: String,
+        mirrorLocally: Boolean,
+        startPositionMs: Long = 0L,
+        startPlaying: Boolean = false,
+    )
     fun play()
     fun pause()
     fun seekTo(positionMs: Long)
@@ -378,6 +390,42 @@ class NativeBackedBackend : CastControlBackend {
         startPositionMs: Long,
         startPlaying: Boolean,
     ) {
+        openVideoInternal(
+            context,
+            uri,
+            mirrorLocally,
+            startPositionMs,
+            startPlaying,
+            debugDirectPath = null,
+        )
+    }
+
+    override fun openVideoDebugPath(
+        context: Context,
+        filePath: String,
+        mirrorLocally: Boolean,
+        startPositionMs: Long,
+        startPlaying: Boolean,
+    ) {
+        val debugUri = Uri.fromFile(java.io.File(filePath))
+        openVideoInternal(
+            context,
+            debugUri,
+            mirrorLocally,
+            startPositionMs,
+            startPlaying,
+            debugDirectPath = filePath,
+        )
+    }
+
+    private fun openVideoInternal(
+        context: Context,
+        uri: Uri,
+        mirrorLocally: Boolean,
+        startPositionMs: Long,
+        startPlaying: Boolean,
+        debugDirectPath: String?,
+    ) {
         var opened = false
         try {
             openPfd1?.close()
@@ -388,7 +436,9 @@ class NativeBackedBackend : CastControlBackend {
             // Only file:// URIs are safe to pass through as raw native paths.
             // Shared media and picker/share intents normally arrive as
             // content:// URIs and should stay on the fd-backed path.
-            val filePath = resolveFilePath(context, uri)
+            // Debug intents may also provide an explicit raw path to avoid
+            // content:// URI grant issues when launched from adb.
+            val filePath = debugDirectPath ?: resolveFilePath(context, uri)
             if (filePath != null) {
                 nativeOpenVideoPath(
                     uri.toString(),
@@ -685,6 +735,22 @@ class Connection(private val backend: NativeBackedBackend) {
         backend.openVideo(
             context,
             uri,
+            mirrorLocally,
+            startPositionMs,
+            startPlaying,
+        )
+    }
+
+    fun openVideoDebugPath(
+        context: Context,
+        filePath: String,
+        mirrorLocally: Boolean,
+        startPositionMs: Long,
+        startPlaying: Boolean,
+    ) {
+        backend.openVideoDebugPath(
+            context,
+            filePath,
             mirrorLocally,
             startPositionMs,
             startPlaying,
@@ -1015,15 +1081,17 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     }
 
     suspend fun openVideoFromCommand(
-        uri: Uri,
+        uri: Uri?,
+        filePath: String?,
         startPlaying: Boolean,
         startPositionMs: Long,
     ) {
+        val effectiveUri = uri ?: filePath?.let { Uri.fromFile(java.io.File(it)) } ?: return
         pendingExternalPlayUri = null
         reconnectResumeArmed = false
-        reconnectResumeUri = uri.toString()
-        selectedUri = uri
-        val mediaItem = MediaItem.fromUri(uri)
+        reconnectResumeUri = effectiveUri.toString()
+        selectedUri = effectiveUri
+        val mediaItem = MediaItem.fromUri(effectiveUri)
         exoPlayer.setMediaItem(mediaItem)
         exoPlayer.prepare()
         exoPlayer.seekTo(startPositionMs.coerceAtLeast(0L))
@@ -1040,7 +1108,18 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             0f
         }
         if (connectionState == Connection.State.CONNECTED) {
-            openSelectedVideoOnCast(uri, startPlaying, positionMs)
+            if (filePath != null) {
+                connection.openVideoDebugPath(
+                    context,
+                    filePath,
+                    localMirrorEnabled,
+                    positionMs,
+                    startPlaying,
+                )
+                castOpenedUri = effectiveUri.toString()
+            } else {
+                openSelectedVideoOnCast(effectiveUri, startPlaying, positionMs)
+            }
         }
     }
 
@@ -1234,6 +1313,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 DebugCommand.Disconnect -> connection.disconnect()
                 is DebugCommand.OpenVideo -> openVideoFromCommand(
                     command.uri,
+                    command.filePath,
                     command.startPlaying,
                     command.startPositionMs,
                 )

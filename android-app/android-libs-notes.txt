@@ -9,11 +9,30 @@ Versions
 - libvpx 1.16.0
 - opus 1.6.1
 
+Good APK
+- The current "good" APK is:
+  archive/castcontrol-good-c61c47a154a5-ffmpeg8.1.apk
+- It is built from commit:
+  c61c47a154a51b9d5c24a9bcc341e02829741488
+- It uses:
+  FFmpeg 8.1
+  libvpx 1.16.0
+  opus 1.6.1
+- It uses the isolated prefix:
+  ~/android/opt-81/prefix-nofilter
+
 Known-good combo
 - Commit c61c47a154a51b9d5c24a9bcc341e02829741488 works well with:
   FFmpeg 7.1
   libvpx 1.16.0
   opus 1.6.1
+
+Known-better combo
+- Commit c61c47a154a51b9d5c24a9bcc341e02829741488 is also built and tested with:
+  FFmpeg 8.1
+  libvpx 1.16.0
+  opus 1.6.1
+  prefix ~/android/opt-81/prefix-nofilter
 
 FFmpeg configure flags before the FFmpeg video-transform switch
 - --disable-shared
@@ -37,6 +56,68 @@ FFmpeg configure flags before the FFmpeg video-transform switch
 - --extra-cflags="-fPIC -mbranch-protection=standard"
 - --extra-cxxflags="-fPIC -mbranch-protection=standard"
 - --extra-ldflags="-fPIC -mbranch-protection=standard"
+
+FFmpeg 8.1 no-filter configure flags used for the good APK
+- --prefix=/home/mst/android/opt-81/prefix-nofilter
+- --target-os=android
+- --arch=aarch64
+- --cpu=armv8-a
+- --cc=/home/mst/android/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang
+- --cxx=/home/mst/android/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang++
+- --ar=/home/mst/android/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+- --ranlib=/home/mst/android/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib
+- --strip=/home/mst/android/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip
+- --nm=/home/mst/android/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm
+- --sysroot=/home/mst/android/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/sysroot
+- --enable-cross-compile
+- --disable-shared
+- --enable-static
+- --disable-programs
+- --disable-doc
+- --disable-debug
+- --disable-everything
+- --disable-avfilter
+- --disable-avdevice
+- --enable-avcodec
+- --enable-avformat
+- --enable-avutil
+- --enable-swresample
+- --enable-swscale
+- --enable-protocol=file
+- --enable-demuxer=mov,matroska
+- --enable-parser=aac,h264,hevc,vp8,vp9,av1,opus
+- --enable-decoder=aac,h264,hevc,vp8,vp9,av1,opus,mjpeg,png
+- --enable-bsfs
+- --enable-bsf=aac_adtstoasc,h264_mp4toannexb,hevc_mp4toannexb
+- --enable-zlib
+- --extra-cflags=-fPIC -mbranch-protection=standard
+- --extra-cxxflags=-fPIC -mbranch-protection=standard
+- --extra-ldflags=-fPIC -mbranch-protection=standard
+
+libvpx 1.16.0 configure flags used for the good APK
+- --target=arm64-android-gcc
+- --prefix=/home/mst/android/opt-81/prefix-nofilter
+- --enable-static
+- --disable-shared
+- --disable-examples
+- --disable-unit-tests
+- --disable-tools
+- --disable-docs
+- --disable-webm-io
+- --disable-libyuv
+- --enable-pic
+- --extra-cflags=-fPIC -mbranch-protection=standard
+- --extra-cxxflags=-fPIC -mbranch-protection=standard
+
+opus 1.6.1 configure flags used for the good APK
+- --host=aarch64-linux-android
+- --prefix=/home/mst/android/opt-81/prefix-nofilter
+- CC=/home/mst/android/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android29-clang
+- CFLAGS=-fPIC -mbranch-protection=standard
+- CXXFLAGS=-fPIC -mbranch-protection=standard
+- LDFLAGS=-fPIC -mbranch-protection=standard
+- --enable-static
+- --disable-shared
 
 FFmpeg configure flags used for the FFmpeg video-transform switch
 - --disable-shared
@@ -86,3 +167,33 @@ Usage
   libvpx_include_dirs
   libvpx_lib_dirs
 - Gradle does not take the prefix directly.
+
+Good APK build commands
+- Build FFmpeg 8.1 in a clean build directory:
+  mkdir -p ~/android/opt-81/build/ffmpeg-8.1-nofilter-bti
+  cd ~/android/opt-81/build/ffmpeg-8.1-nofilter-bti
+  ~/android/opt-81/src/ffmpeg-8.1/configure [the FFmpeg 8.1 no-filter flags above]
+  make -j"$(nproc)"
+  make install
+- Build libvpx 1.16.0:
+  mkdir -p ~/android/opt-81/build/libvpx-1.16.0-bti
+  cd ~/android/opt-81/build/libvpx-1.16.0-bti
+  ~/android/opt-81/src/libvpx-1.16.0/configure [the libvpx flags above]
+  make -j"$(nproc)"
+  make install
+- Build opus 1.6.1 from its source tree:
+  cd ~/android/opt-81/src/opus-1.6.1
+  ./configure [the opus flags above]
+  make -j"$(nproc)"
+  make install
+- Point GN at the prefix with these args in out/android/args.gn:
+  ffmpeg_include_dirs = [ "/home/mst/android/opt-81/prefix-nofilter/include" ]
+  ffmpeg_lib_dirs = [ "/home/mst/android/opt-81/prefix-nofilter/lib" ]
+  libopus_include_dirs = [ "/home/mst/android/opt-81/prefix-nofilter/include/opus" ]
+  libopus_lib_dirs = [ "/home/mst/android/opt-81/prefix-nofilter/lib" ]
+  libvpx_include_dirs = [ "/home/mst/android/opt-81/prefix-nofilter/include" ]
+  libvpx_lib_dirs = [ "/home/mst/android/opt-81/prefix-nofilter/lib" ]
+- Build the native library:
+  ninja -C out/android libcontrolcast.so
+- Build the APK from android-app:
+  ./gradlew assembleDebug
