@@ -18,6 +18,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts.GetContent
 import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -188,6 +189,15 @@ private fun displayNameForUri(context: Context, uri: Uri?): String {
         ?: uri.lastPathSegment?.substringAfterLast('/')
         ?: uri.toString().takeIf { it.isNotBlank() }
         ?: "No file"
+}
+
+private enum class VideoPickerMode {
+    DOCUMENTS,
+    GALLERY,
+}
+
+private fun videoPickerModeFromPref(raw: String?): VideoPickerMode {
+    return VideoPickerMode.entries.firstOrNull { it.name == raw } ?: VideoPickerMode.DOCUMENTS
 }
 
 class MainActivity : ComponentActivity() {
@@ -871,6 +881,9 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var videoPassthroughEnabled by rememberSaveable {
         mutableStateOf(prefs.getBoolean("video_passthrough_enabled", false))
     }
+    var videoPickerMode by rememberSaveable {
+        mutableStateOf(videoPickerModeFromPref(prefs.getString("video_picker_mode", null)))
+    }
     var brightnessLevel by rememberSaveable { mutableIntStateOf(0) }
     var isPlaying by rememberSaveable { mutableStateOf(false) }
     var durationMs by rememberSaveable { mutableLongStateOf(0L) }
@@ -1430,7 +1443,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         }
     }
 
-    val openVideoLauncher = rememberLauncherForActivityResult(OpenDocument()) { uri ->
+    fun handlePickedVideo(uri: Uri?, persistable: Boolean) {
         if (uri != null) {
             pendingExternalPlayUri = null
             val shouldStartPlaying = if (connectionState == Connection.State.CONNECTED) {
@@ -1440,10 +1453,16 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             }
             reconnectResumeArmed = false
             reconnectResumeUri = uri.toString()
-            context.contentResolver.takePersistableUriPermission(
-                uri,
-                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
-            )
+            if (persistable) {
+                try {
+                    context.contentResolver.takePersistableUriPermission(
+                        uri,
+                        android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                    )
+                } catch (_: SecurityException) {
+                } catch (_: IllegalArgumentException) {
+                }
+            }
             selectedUri = uri
             val mediaItem = MediaItem.fromUri(uri)
             exoPlayer.setMediaItem(mediaItem)
@@ -1458,6 +1477,26 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 openSelectedVideoOnCast(uri, shouldStartPlaying)
             }
         }
+    }
+
+    val openDocumentVideoLauncher = rememberLauncherForActivityResult(OpenDocument()) { uri ->
+        handlePickedVideo(uri, persistable = true)
+    }
+
+    val getContentVideoLauncher = rememberLauncherForActivityResult(GetContent()) { uri ->
+        handlePickedVideo(uri, persistable = false)
+    }
+
+    fun launchVideoPicker() {
+        when (videoPickerMode) {
+            VideoPickerMode.DOCUMENTS -> openDocumentVideoLauncher.launch(arrayOf("video/*"))
+            VideoPickerMode.GALLERY -> getContentVideoLauncher.launch("video/*")
+        }
+    }
+
+    fun setVideoPickerMode(mode: VideoPickerMode) {
+        videoPickerMode = mode
+        prefs.edit().putString("video_picker_mode", mode.name).apply()
     }
 
     if (isFullscreen) {
@@ -1602,7 +1641,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Button(onClick = { openVideoLauncher.launch(arrayOf("video/*")) }) {
+                Button(onClick = { launchVideoPicker() }) {
                     Text("Open Video")
                 }
                 Button(
@@ -1653,6 +1692,27 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                     color = Color(0xFF6B7F8E),
                     style = MaterialTheme.typography.bodySmall,
                 )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Switch(
+                        checked = videoPickerMode == VideoPickerMode.GALLERY,
+                        onCheckedChange = {
+                            setVideoPickerMode(
+                                if (it) VideoPickerMode.GALLERY else VideoPickerMode.DOCUMENTS,
+                            )
+                        },
+                    )
+                    Text(
+                        text = if (videoPickerMode == VideoPickerMode.GALLERY) {
+                            "Picker: Gallery"
+                        } else {
+                            "Picker: Documents"
+                        },
+                        color = Color(0xFFD9E2EC),
+                    )
+                }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
