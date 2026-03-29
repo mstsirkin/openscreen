@@ -34,6 +34,86 @@ struct X11Capturer::X11State {
   XImage* shm_image = nullptr;
 };
 
+namespace {
+
+bool QueryCaptureSize(Display* display,
+                      Window window,
+                      int* width,
+                      int* height) {
+  XWindowAttributes attrs;
+  if (!XGetWindowAttributes(display, window, &attrs)) {
+    return false;
+  }
+  *width = attrs.width & ~1;
+  *height = attrs.height & ~1;
+  return *width > 0 && *height > 0;
+}
+
+bool RecreateShmImage(Display* display,
+                      bool use_shm,
+                      int width,
+                      int height,
+                      XShmSegmentInfo* shm_info,
+                      XImage** shm_image) {
+  if (*shm_image) {
+    if (use_shm) {
+      XShmDetach(display, shm_info);
+      shmdt(shm_info->shmaddr);
+    }
+    XDestroyImage(*shm_image);
+    *shm_image = nullptr;
+    *shm_info = {};
+  }
+
+  if (!use_shm) {
+    return false;
+  }
+
+  *shm_image = XShmCreateImage(
+      display,
+      DefaultVisual(display, DefaultScreen(display)),
+      DefaultDepth(display, DefaultScreen(display)),
+      ZPixmap, nullptr, shm_info, width, height);
+  if (!*shm_image) {
+    return false;
+  }
+
+  shm_info->shmid = shmget(IPC_PRIVATE,
+                           (*shm_image)->bytes_per_line * (*shm_image)->height,
+                           IPC_CREAT | 0777);
+  if (shm_info->shmid < 0) {
+    XDestroyImage(*shm_image);
+    *shm_image = nullptr;
+    *shm_info = {};
+    return false;
+  }
+
+  shm_info->shmaddr =
+      (*shm_image)->data = static_cast<char*>(shmat(shm_info->shmid, nullptr, 0));
+  if (shm_info->shmaddr == reinterpret_cast<char*>(-1)) {
+    shmctl(shm_info->shmid, IPC_RMID, nullptr);
+    XDestroyImage(*shm_image);
+    *shm_image = nullptr;
+    *shm_info = {};
+    return false;
+  }
+
+  shm_info->readOnly = 0;
+  if (!XShmAttach(display, shm_info)) {
+    shmdt(shm_info->shmaddr);
+    shmctl(shm_info->shmid, IPC_RMID, nullptr);
+    XDestroyImage(*shm_image);
+    *shm_image = nullptr;
+    *shm_info = {};
+    return false;
+  }
+
+  shmctl(shm_info->shmid, IPC_RMID, nullptr);
+  return true;
+}
+
+}  // namespace
+
 X11Capturer::X11Capturer(Environment& env, int fps, FrameCallback callback)
     : env_(env), fps_(fps), callback_(std::move(callback)) {
   x11_ = std::make_unique<X11State>();
@@ -99,47 +179,23 @@ void X11Capturer::CaptureThread() {
 
   Window window = capture_window_ ? target_window_
                                    : DefaultRootWindow(display);
-  const int w = width_;
-  const int h = height_;
+  int current_width = width_;
+  int current_height = height_;
 
   // Set up XShm
   bool use_shm = XShmQueryExtension(display);
   XShmSegmentInfo shm_info{};
   XImage* shm_image = nullptr;
-
-  if (use_shm) {
-    shm_image = XShmCreateImage(
-        display,
-        DefaultVisual(display, DefaultScreen(display)),
-        DefaultDepth(display, DefaultScreen(display)),
-        ZPixmap, nullptr, &shm_info, w, h);
-    if (shm_image) {
-      shm_info.shmid = shmget(IPC_PRIVATE,
-                               shm_image->bytes_per_line * shm_image->height,
-                               IPC_CREAT | 0777);
-      if (shm_info.shmid >= 0) {
-        shm_info.shmaddr = shm_image->data =
-            static_cast<char*>(shmat(shm_info.shmid, nullptr, 0));
-        shm_info.readOnly = 0;
-        XShmAttach(display, &shm_info);
-        shmctl(shm_info.shmid, IPC_RMID, nullptr);
-      } else {
-        XDestroyImage(shm_image);
-        shm_image = nullptr;
-        use_shm = false;
-      }
-    } else {
-      use_shm = false;
-    }
-  }
+  use_shm = RecreateShmImage(display, use_shm, current_width, current_height,
+                             &shm_info, &shm_image);
 
   OSP_LOG_INFO << "X11Capturer thread: started"
                << (use_shm ? " (XShm)" : " (XGetImage)");
 
   // Allocate I420 buffers (thread-local, no sharing needed)
-  std::vector<uint8_t> y_buf(w * h);
-  std::vector<uint8_t> u_buf((w / 2) * (h / 2));
-  std::vector<uint8_t> v_buf((w / 2) * (h / 2));
+  std::vector<uint8_t> y_buf(current_width * current_height);
+  std::vector<uint8_t> u_buf((current_width / 2) * (current_height / 2));
+  std::vector<uint8_t> v_buf((current_width / 2) * (current_height / 2));
 
   const auto frame_duration = std::chrono::microseconds(1000000 / fps_);
 
@@ -147,13 +203,33 @@ void X11Capturer::CaptureThread() {
     auto t0 = std::chrono::steady_clock::now();
     auto capture_begin = env_.now();
 
+    int next_width = 0;
+    int next_height = 0;
+    if (!QueryCaptureSize(display, window, &next_width, &next_height)) {
+      std::this_thread::sleep_for(frame_duration);
+      continue;
+    }
+    if (next_width != current_width || next_height != current_height) {
+      OSP_LOG_INFO << "X11Capturer: capture size changed from "
+                   << current_width << "x" << current_height << " to "
+                   << next_width << "x" << next_height;
+      current_width = next_width;
+      current_height = next_height;
+      use_shm = RecreateShmImage(display, use_shm, current_width,
+                                 current_height, &shm_info, &shm_image);
+      y_buf.resize(current_width * current_height);
+      u_buf.resize((current_width / 2) * (current_height / 2));
+      v_buf.resize((current_width / 2) * (current_height / 2));
+    }
+
     // Capture
     XImage* image = nullptr;
     if (use_shm && shm_image) {
       XShmGetImage(display, window, shm_image, 0, 0, AllPlanes);
       image = shm_image;
     } else {
-      image = XGetImage(display, window, 0, 0, w, h, AllPlanes, ZPixmap);
+      image = XGetImage(display, window, 0, 0, current_width, current_height,
+                        AllPlanes, ZPixmap);
     }
 
     if (!image) {
@@ -165,15 +241,15 @@ void X11Capturer::CaptureThread() {
     const auto* bgra = reinterpret_cast<const uint8_t*>(image->data);
     const int stride = image->bytes_per_line;
 
-    for (int y = 0; y < h; y += 2) {
+    for (int y = 0; y < current_height; y += 2) {
       const uint8_t* row0 = bgra + y * stride;
       const uint8_t* row1 = bgra + (y + 1) * stride;
-      uint8_t* y0 = y_buf.data() + y * w;
-      uint8_t* y1 = y_buf.data() + (y + 1) * w;
-      uint8_t* u_row = u_buf.data() + (y / 2) * (w / 2);
-      uint8_t* v_row = v_buf.data() + (y / 2) * (w / 2);
+      uint8_t* y0 = y_buf.data() + y * current_width;
+      uint8_t* y1 = y_buf.data() + (y + 1) * current_width;
+      uint8_t* u_row = u_buf.data() + (y / 2) * (current_width / 2);
+      uint8_t* v_row = v_buf.data() + (y / 2) * (current_width / 2);
 
-      for (int x = 0; x < w; x += 2) {
+      for (int x = 0; x < current_width; x += 2) {
         int b00 = row0[x*4], g00 = row0[x*4+1], r00 = row0[x*4+2];
         int b10 = row0[(x+1)*4], g10 = row0[(x+1)*4+1], r10 = row0[(x+1)*4+2];
         int b01 = row1[x*4], g01 = row1[x*4+1], r01 = row1[x*4+2];
@@ -205,17 +281,17 @@ void X11Capturer::CaptureThread() {
     auto v_copy = std::make_shared<std::vector<uint8_t>>(v_buf);
 
     env_.task_runner().PostTask(
-        [this, y_copy, u_copy, v_copy, w, h,
+        [this, y_copy, u_copy, v_copy, current_width, current_height,
          capture_begin, capture_end] {
           Frame frame;
-          frame.width = w;
-          frame.height = h;
+          frame.width = current_width;
+          frame.height = current_height;
           frame.y = y_copy->data();
           frame.u = u_copy->data();
           frame.v = v_copy->data();
-          frame.y_stride = w;
-          frame.u_stride = w / 2;
-          frame.v_stride = w / 2;
+          frame.y_stride = current_width;
+          frame.u_stride = current_width / 2;
+          frame.v_stride = current_width / 2;
           frame.capture_begin = capture_begin;
           frame.capture_end = capture_end;
           callback_(frame, capture_begin);
@@ -229,9 +305,11 @@ void X11Capturer::CaptureThread() {
   }
 
   // Cleanup
-  if (use_shm && shm_image) {
-    XShmDetach(display, &shm_info);
-    shmdt(shm_info.shmaddr);
+  if (shm_image) {
+    if (use_shm) {
+      XShmDetach(display, &shm_info);
+      shmdt(shm_info.shmaddr);
+    }
     XDestroyImage(shm_image);
   }
   XCloseDisplay(display);

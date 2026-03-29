@@ -30,6 +30,43 @@ X11CAST_BIN = "x11cast"
 DEFAULT_NULL_SINK = "x11cast"
 
 
+def _get_all_pids(root_pid):
+    """Return root_pid plus all descendant PIDs discoverable via /proc."""
+    pids = {root_pid}
+    children_by_parent = {}
+
+    try:
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            status_path = os.path.join("/proc", entry, "status")
+            try:
+                with open(status_path, "r", encoding="utf-8") as status_file:
+                    ppid = None
+                    for line in status_file:
+                        if line.startswith("PPid:"):
+                            ppid = int(line.split()[1])
+                            break
+            except OSError:
+                continue
+            if ppid is None:
+                continue
+            pid = int(entry)
+            children_by_parent.setdefault(ppid, []).append(pid)
+    except OSError:
+        return pids
+
+    stack = [root_pid]
+    while stack:
+        pid = stack.pop()
+        for child_pid in children_by_parent.get(pid, []):
+            if child_pid not in pids:
+                pids.add(child_pid)
+                stack.append(child_pid)
+
+    return pids
+
+
 def ensure_null_sink(sink_name):
     """Create a PulseAudio/PipeWire null sink if it doesn't already exist."""
     try:
@@ -99,6 +136,49 @@ def find_windows_by_pid(pid, timeout=30):
             pass
         time.sleep(0.5)
     return []
+
+
+def wait_for_window_ready(wid_hex, timeout=5):
+    """Wait until xwininfo reports a stable, viewable window geometry."""
+    deadline = time.monotonic() + timeout
+    last_geometry = None
+    stable_polls = 0
+
+    while time.monotonic() < deadline:
+        try:
+            out = subprocess.check_output(
+                ["xwininfo", "-id", wid_hex],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            time.sleep(0.2)
+            continue
+
+        width = None
+        height = None
+        viewable = False
+        for line in out.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("Width:"):
+                width = int(stripped.split(":", 1)[1].strip())
+            elif stripped.startswith("Height:"):
+                height = int(stripped.split(":", 1)[1].strip())
+            elif stripped == "Map State: IsViewable":
+                viewable = True
+
+        geometry = (width, height)
+        if viewable and width and height:
+            if geometry == last_geometry:
+                stable_polls += 1
+                if stable_polls >= 2:
+                    return True
+            else:
+                last_geometry = geometry
+                stable_polls = 1
+        time.sleep(0.2)
+
+    return False
 
 
 def pick_window(windows):
@@ -213,6 +293,7 @@ def main():
 
     wid_hex, window_pid = pick_window(windows)
     title = next((t for w, p, t in windows if w == wid_hex), wid_hex)
+    wait_for_window_ready(wid_hex)
     print(f"Window: {title} ({wid_hex}, pid {window_pid})")
 
     # Start casting
