@@ -14,6 +14,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <chrono>
 #include <cstring>
 #include <utility>
 #include <vector>
@@ -33,6 +34,7 @@
 namespace openscreen {
 
 namespace {
+constexpr auto kConnectPollDelay = std::chrono::milliseconds(50);
 
 ErrorOr<std::vector<uint8_t>> GetDEREncodedPeerCertificate(const SSL& ssl) {
   X509* const peer_cert = SSL_get_peer_certificate(&ssl);
@@ -238,12 +240,48 @@ void TlsConnectionFactoryPosix::Connect(
   if (connection->socket_->state() == TcpSocketState::kClosed) {
     return;
   }
-  OSP_CHECK(connection->socket_->state() == TcpSocketState::kConnected);
+
+  auto* socket = static_cast<StreamSocketPosix*>(connection->socket_.get());
+  if (socket->state() == TcpSocketState::kConnecting) {
+    Error connect_result = socket->FinishConnect();
+    if (connect_result.code() == Error::Code::kAgain) {
+      task_runner_.PostTaskWithDelay(
+          [weak_this = weak_factory_.GetWeakPtr(),
+           conn = std::move(connection)]() mutable {
+            if (auto* self = weak_this.get()) {
+              self->Connect(std::move(conn));
+            }
+          },
+          kConnectPollDelay);
+      return;
+    }
+    if (!connect_result.ok()) {
+      const auto endpoint = socket->remote_address();
+      if (endpoint) {
+        OSP_LOG_ERROR << "TlsConnectionFactoryPosix::Connect tcp connect "
+                      << "failed remote=" << endpoint.value()
+                      << " error=" << connect_result;
+        DispatchConnectionFailed(endpoint.value());
+      } else {
+        DispatchError(connect_result);
+      }
+      TRACE_SET_RESULT(connect_result);
+      return;
+    }
+  }
+
+  OSP_CHECK(socket->state() == TcpSocketState::kConnected);
   ClearOpenSSLERRStack(CURRENT_LOCATION);
   const int connection_status = SSL_connect(connection->ssl_.get());
   if (connection_status != 1) {
     Error error = GetSSLError(connection->ssl_.get(), connection_status);
     if (error.code() == Error::Code::kAgain) {
+      static int retry_log_budget = 32;
+      if (retry_log_budget > 0) {
+        --retry_log_budget;
+        OSP_LOG_INFO << "TlsConnectionFactoryPosix::Connect retry remote="
+                     << connection->GetRemoteEndpoint() << " error=" << error;
+      }
       task_runner_.PostTask([weak_this = weak_factory_.GetWeakPtr(),
                              conn = std::move(connection)]() mutable {
         if (auto* self = weak_this.get()) {
@@ -252,12 +290,16 @@ void TlsConnectionFactoryPosix::Connect(
       });
       return;
     } else {
-      OSP_DVLOG << "SSL_connect failed with error: " << error;
+      OSP_LOG_ERROR << "TlsConnectionFactoryPosix::Connect failed remote="
+                    << connection->GetRemoteEndpoint() << " error=" << error;
       DispatchConnectionFailed(connection->GetRemoteEndpoint());
       TRACE_SET_RESULT(error);
       return;
     }
   }
+
+  OSP_LOG_INFO << "TlsConnectionFactoryPosix::Connect success remote="
+               << connection->GetRemoteEndpoint();
 
   ErrorOr<std::vector<uint8_t>> der_peer_cert =
       GetDEREncodedPeerCertificate(*connection->ssl_);

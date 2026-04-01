@@ -17,9 +17,7 @@ namespace openscreen {
 namespace {
 constexpr int kDefaultMaxBacklogSize = 64;
 
-// Call Select with no timeout, so that it doesn't block. Then use the result
-// to determine if any connection is pending.
-bool IsConnectionPending(int fd) {
+bool IsHandleReadable(int fd) {
   fd_set handle_set{};
   FD_ZERO(&handle_set);
   FD_SET(fd, &handle_set);
@@ -27,6 +25,16 @@ bool IsConnectionPending(int fd) {
     0
   };
   return select(fd + 1, &handle_set, nullptr, nullptr, &tv) > 0;
+}
+
+bool IsHandleWritable(int fd) {
+  fd_set handle_set{};
+  FD_ZERO(&handle_set);
+  FD_SET(fd, &handle_set);
+  struct timeval tv {
+    0
+  };
+  return select(fd + 1, nullptr, &handle_set, nullptr, &tv) > 0;
 }
 }  // namespace
 
@@ -74,7 +82,7 @@ ErrorOr<std::unique_ptr<StreamSocket>> StreamSocketPosix::Accept() {
   }
 
   // Check if any connection is pending, and return a special error code if not.
-  if (!IsConnectionPending(handle_.fd)) {
+  if (!IsHandleReadable(handle_.fd)) {
     return Error::Code::kAgain;
   }
 
@@ -142,8 +150,12 @@ Error StreamSocketPosix::Connect(const IPEndpoint& remote_endpoint) {
   }
 
   SocketAddressPosix address(remote_endpoint);
+  OSP_LOG_INFO << "StreamSocketPosix::Connect remote=" << remote_endpoint;
   int ret = connect(handle_.fd, address.address(), address.size());
-  if (ret != 0 && errno != EINPROGRESS) {
+  const bool connect_pending = (ret != 0 && errno == EINPROGRESS);
+  if (ret != 0 && !connect_pending) {
+    OSP_LOG_ERROR << "StreamSocketPosix::Connect failed errno=" << errno
+                  << " message=" << strerror(errno);
     return CloseOnError(
         Error(Error::Code::kSocketConnectFailure, strerror(errno)));
   }
@@ -166,7 +178,54 @@ Error StreamSocketPosix::Connect(const IPEndpoint& remote_endpoint) {
   }
 
   remote_address_ = remote_endpoint;
+  state_ =
+      connect_pending ? TcpSocketState::kConnecting : TcpSocketState::kConnected;
+  if (local_address_) {
+    OSP_LOG_INFO << "StreamSocketPosix::Connect local="
+                 << local_address_->endpoint();
+  }
+  return Error::None();
+}
+
+Error StreamSocketPosix::FinishConnect() {
+  if (!EnsureInitializedAndOpen()) {
+    return ReportSocketClosedError();
+  }
+
+  if (state_ == TcpSocketState::kConnected) {
+    return Error::None();
+  }
+
+  if (state_ != TcpSocketState::kConnecting) {
+    return CloseOnError(Error::Code::kSocketInvalidState);
+  }
+
+  if (!IsHandleWritable(handle_.fd)) {
+    return Error::Code::kAgain;
+  }
+
+  int socket_error = 0;
+  socklen_t socket_error_size = sizeof(socket_error);
+  if (getsockopt(handle_.fd, SOL_SOCKET, SO_ERROR, &socket_error,
+                 &socket_error_size) != 0) {
+    return CloseOnError(
+        Error(Error::Code::kSocketConnectFailure, strerror(errno)));
+  }
+
+  if (socket_error == EINPROGRESS || socket_error == EALREADY) {
+    return Error::Code::kAgain;
+  }
+
+  if (socket_error != 0) {
+    OSP_LOG_ERROR << "StreamSocketPosix::FinishConnect failed errno="
+                  << socket_error << " message=" << strerror(socket_error);
+    return CloseOnError(
+        Error(Error::Code::kSocketConnectFailure, strerror(socket_error)));
+  }
+
   state_ = TcpSocketState::kConnected;
+  OSP_LOG_INFO << "StreamSocketPosix::FinishConnect connected remote="
+               << remote_address_.value();
   return Error::None();
 }
 

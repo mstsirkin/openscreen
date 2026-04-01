@@ -86,6 +86,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.receiveAsFlow
+import java.net.InetSocketAddress
+import java.net.Socket
 
 sealed interface DebugCommand {
     data class Connect(val target: String) : DebugCommand
@@ -671,6 +673,11 @@ class Connection(private val backend: NativeBackedBackend) {
                         target = debugTargetToCastDevice(recoveredTarget)
                     }
                 }
+            } else if (statusText.startsWith("Not connected.")) {
+                state = State.DISCONNECTED
+                if (target != null) {
+                    lastError = OsConstants.ENOTCONN
+                }
             } else if (target != null && state == State.CONNECTING) {
                 state = State.CONNECTING
             } else if (target == null) {
@@ -696,6 +703,13 @@ class Connection(private val backend: NativeBackedBackend) {
                     lastError = 0
                     continue
                 }
+                if (backend.status.value.startsWith("Not connected.")) {
+                    state = State.DISCONNECTED
+                    if (target != null) {
+                        lastError = OsConstants.ENOTCONN
+                    }
+                    continue
+                }
                 if (target != null) {
                     state = State.CONNECTING
                     continue
@@ -714,6 +728,22 @@ class Connection(private val backend: NativeBackedBackend) {
         target = device
         state = State.CONNECTING
         lastError = 0
+        kotlinx.coroutines.withContext(Dispatchers.IO) {
+            runCatching {
+                Socket().use { socket ->
+                    socket.connect(InetSocketAddress(device.host, device.port), 3000)
+                    android.util.Log.i(
+                        "ControlCast",
+                        "JAVA_SOCKET_CONNECT success remote=${device.target} local=${socket.localAddress?.hostAddress}:${socket.localPort}",
+                    )
+                }
+            }.onFailure { error ->
+                android.util.Log.e(
+                    "ControlCast",
+                    "JAVA_SOCKET_CONNECT failed remote=${device.target} error=${error.javaClass.simpleName}: ${error.message}",
+                )
+            }
+        }
         val result = backend.connect(device.target)
         backend.syncStatus()
         if (backend.status.value.startsWith("Connected to ")) {

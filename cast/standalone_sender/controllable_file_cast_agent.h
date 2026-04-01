@@ -22,6 +22,7 @@
 #include "platform/api/tls_connection_factory.h"
 #include "platform/base/error.h"
 #include "platform/impl/task_runner.h"
+#include "util/alarm.h"
 
 namespace Json {
 class Value;
@@ -103,6 +104,7 @@ class ControllableFileCastAgent final
   SenderSocketFactory socket_factory_;
   std::unique_ptr<TlsConnectionFactory> connection_factory_;
   CastSocketMessagePort message_port_;
+  Alarm connect_timeout_alarm_;
 
   int next_request_id_ = 1;
   std::optional<ConnectionSettings> connection_settings_;

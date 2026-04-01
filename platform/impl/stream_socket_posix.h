@@ -42,6 +42,7 @@ class StreamSocketPosix : public StreamSocket {
   Error Bind() override;
   Error Close() override;
   Error Connect(const IPEndpoint& remote_endpoint) override;
+  Error FinishConnect();
   Error Listen() override;
   Error Listen(int max_backlog_size) override;
 

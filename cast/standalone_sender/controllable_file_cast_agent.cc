@@ -24,6 +24,7 @@ constexpr char kJsonKeyPlayerState[] = "playerState";
 constexpr char kJsonKeyIdleReason[] = "idleReason";
 constexpr char kJsonKeyMediaSessionId[] = "mediaSessionId";
 constexpr char kJsonKeyCurrentTime[] = "currentTime";
+constexpr auto kConnectTimeout = std::chrono::seconds(8);
 }  // namespace
 
 ControllableFileCastAgent::ControllableFileCastAgent(
@@ -37,7 +38,8 @@ ControllableFileCastAgent::ControllableFileCastAgent(
                       CastCRLTrustStore::Create()),
       connection_factory_(
           TlsConnectionFactory::CreateFactory(socket_factory_, task_runner_)),
-      message_port_(router_) {
+      message_port_(router_),
+      connect_timeout_alarm_(&Clock::now, task_runner_) {
   router_.AddHandlerForLocalId(kPlatformSenderId, this);
   socket_factory_.set_factory(connection_factory_.get());
 }
@@ -48,6 +50,14 @@ ControllableFileCastAgent::~ControllableFileCastAgent() {
 
 void ControllableFileCastAgent::Connect(ConnectionSettings settings) {
   connection_settings_ = std::move(settings);
+  connect_timeout_alarm_.Cancel();
+  connect_timeout_alarm_.ScheduleFromNow(
+      [this]() {
+        if (!sender_) {
+          Shutdown("connect_timeout");
+        }
+      },
+      kConnectTimeout);
   const auto policy = connection_settings_->should_include_video
                           ? DeviceMediaPolicy::kIncludesVideo
                           : DeviceMediaPolicy::kAudioOnly;
@@ -434,6 +444,7 @@ void ControllableFileCastAgent::StartSender() {
   if (!current_negotiation_) {
     return;
   }
+  connect_timeout_alarm_.Cancel();
 
   sender_ = std::make_unique<ControllableFileSender>(
       *environment_, connection_settings_.value(), current_session_.get(),
@@ -454,6 +465,7 @@ void ControllableFileCastAgent::Shutdown(const std::string& reason) {
     return;
   }
   shutting_down_ = true;
+  connect_timeout_alarm_.Cancel();
 
   sender_.reset();
   current_session_.reset();
