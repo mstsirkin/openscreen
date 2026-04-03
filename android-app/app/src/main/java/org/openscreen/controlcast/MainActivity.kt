@@ -969,6 +969,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     }
     var castOpenedUri by rememberSaveable { mutableStateOf<String?>(null) }
     var castOpenRestartPending by rememberSaveable { mutableStateOf(false) }
+    var lastCastOpenRequestRealtimeMs by rememberSaveable { mutableLongStateOf(0L) }
     var reconnectResumeArmed by rememberSaveable { mutableStateOf(false) }
     var reconnectResumeUri by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingSharedUri by rememberSaveable { mutableStateOf<Uri?>(null) }
@@ -1010,6 +1011,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         )
         castOpenedUri = uri.toString()
         castOpenRestartPending = true
+        lastCastOpenRequestRealtimeMs = android.os.SystemClock.elapsedRealtime()
         connection.openVideo(
             context,
             uri,
@@ -1219,6 +1221,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 )
                 castOpenedUri = effectiveUri.toString()
                 castOpenRestartPending = true
+                lastCastOpenRequestRealtimeMs = android.os.SystemClock.elapsedRealtime()
             } else {
                 openSelectedVideoOnCast(effectiveUri, startPlaying, positionMs)
             }
@@ -1301,11 +1304,14 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
 
     LaunchedEffect(connectionState) {
         if (connectionState == Connection.State.DISCONNECTED) {
+            val recentOpenRestart =
+                lastCastOpenRequestRealtimeMs > 0L &&
+                    android.os.SystemClock.elapsedRealtime() - lastCastOpenRequestRealtimeMs < 3000L
             android.util.Log.i(
                 "ControlCast",
-                "connectionState DISCONNECTED: castOpenedUri=$castOpenedUri pendingRestart=$castOpenRestartPending selectedUri=$selectedUri isPlaying=$isPlaying",
+                "connectionState DISCONNECTED: castOpenedUri=$castOpenedUri pendingRestart=$castOpenRestartPending recentOpenRestart=$recentOpenRestart selectedUri=$selectedUri isPlaying=$isPlaying",
             )
-            if (!castOpenRestartPending) {
+            if (!castOpenRestartPending && !recentOpenRestart) {
                 castOpenedUri = null
             }
             val currentUri = selectedUri?.toString()
