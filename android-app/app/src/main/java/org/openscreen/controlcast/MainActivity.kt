@@ -1102,6 +1102,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     }
 
     fun seekBoth(targetPositionMs: Long, forceCastSeek: Boolean = false) {
+        val shouldRemainPaused = !isPlaying
         reconnectResumeArmed = false
         latestSeekTargetMs = targetPositionMs.coerceAtLeast(0L)
         latestSeekRealtimeMs = android.os.SystemClock.elapsedRealtime()
@@ -1112,6 +1113,10 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             0f
         }
         exoPlayer.seekTo(positionMs)
+        if (shouldRemainPaused) {
+            exoPlayer.pause()
+            isPlaying = false
+        }
         scheduleCastSeek(positionMs, forceCastSeek)
     }
 
