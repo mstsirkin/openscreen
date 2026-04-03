@@ -1576,6 +1576,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     fun handlePickedVideo(uri: Uri?, persistable: Boolean) {
         if (uri != null) {
             val shouldStartPlaying = true
+            val openingWhileConnected = connectionState == Connection.State.CONNECTED
             pendingExternalPlayUri = uri.toString()
             reconnectResumeArmed = false
             reconnectResumeUri = uri.toString()
@@ -1593,13 +1594,15 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             val mediaItem = MediaItem.fromUri(uri)
             exoPlayer.setMediaItem(mediaItem)
             exoPlayer.prepare()
-            if (localMirrorEnabled && shouldStartPlaying) {
+            if (localMirrorEnabled && shouldStartPlaying && !openingWhileConnected) {
                 exoPlayer.play()
             } else {
                 exoPlayer.pause()
             }
-            isPlaying = shouldStartPlaying
-            if (connectionState == Connection.State.CONNECTED) {
+            // During an in-place Cast reopen, keep local preview paused until the
+            // new Cast session becomes authoritative again.
+            isPlaying = shouldStartPlaying && !openingWhileConnected
+            if (openingWhileConnected) {
                 openSelectedVideoOnCast(uri, shouldStartPlaying)
             }
         }
