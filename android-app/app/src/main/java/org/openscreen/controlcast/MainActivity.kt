@@ -1552,7 +1552,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         if (uri != null) {
             pendingExternalPlayUri = null
             val shouldStartPlaying = if (connectionState == Connection.State.CONNECTED) {
-                connection.isCastPlaying() || isPlaying
+                true
             } else {
                 localMirrorEnabled
             }
