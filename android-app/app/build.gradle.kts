@@ -4,6 +4,7 @@ plugins {
 }
 
 import org.gradle.api.tasks.Copy
+import org.gradle.api.tasks.Exec
 import java.security.MessageDigest
 import java.io.ByteArrayOutputStream
 
@@ -115,14 +116,30 @@ android {
 }
 
 val controlcastSo = rootProject.file("../out/android/libcontrolcast.so")
+val controlcastBuildDir = rootProject.file("../out/android")
 val packagedControlcastSo = project.file("src/main/jniLibs/arm64-v8a/libcontrolcast.so")
 val debugApk = project.layout.buildDirectory.file("outputs/apk/debug/app-debug.apk")
 val archivedDebugApk =
     rootProject.projectDir.parentFile.resolve("archive/castcontrol-$gitHead.apk")
 
+val buildControlcastJniLib by tasks.registering(Exec::class) {
+    group = "build"
+    description = "Build the GN/Ninja controlcast native library before packaging the APK."
+    workingDir = rootProject.projectDir.parentFile
+    commandLine("ninja", "-C", controlcastBuildDir.path, "libcontrolcast.so")
+    inputs.file(controlcastBuildDir.resolve("build.ninja"))
+    outputs.file(controlcastSo)
+    doFirst {
+        require(controlcastBuildDir.resolve("build.ninja").exists()) {
+            "Missing GN build files at ${controlcastBuildDir.path}/build.ninja. Configure the native build first."
+        }
+    }
+}
+
 val syncControlcastJniLib by tasks.registering(Copy::class) {
     group = "build"
     description = "Copy the freshly built GN controlcast native library into app jniLibs."
+    dependsOn(buildControlcastJniLib)
     from(controlcastSo)
     into(packagedControlcastSo.parentFile)
     rename { "libcontrolcast.so" }
