@@ -1005,6 +1005,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var pendingCastSeekTargetMs by remember { mutableLongStateOf(-1L) }
     var pendingCastSeekJob by remember { mutableStateOf<Job?>(null) }
     var lastObservedCastPlaying by remember { mutableStateOf(false) }
+    var lastPickerLaunchMode by rememberSaveable { mutableStateOf<VideoPickerMode?>(null) }
+    var lastPickerLaunchRealtimeMs by rememberSaveable { mutableLongStateOf(0L) }
     val connectionState = connection.state
     val connectedDevice = connection.target
     val isConnected = connectionState == Connection.State.CONNECTED
@@ -1574,6 +1576,17 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     }
 
     fun handlePickedVideo(uri: Uri?, persistable: Boolean) {
+        val launchMode = lastPickerLaunchMode
+        val launchAgeMs =
+            if (lastPickerLaunchRealtimeMs > 0L) {
+                android.os.SystemClock.elapsedRealtime() - lastPickerLaunchRealtimeMs
+            } else {
+                -1L
+            }
+        android.util.Log.i(
+            "ControlCast",
+            "picker result mode=${launchMode ?: "unknown"} ageMs=$launchAgeMs uri=${uri ?: "null"} persistable=$persistable",
+        )
         if (uri != null) {
             val shouldStartPlaying = true
             val openingWhileConnected = connectionState == Connection.State.CONNECTED
@@ -1606,6 +1619,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 openSelectedVideoOnCast(uri, shouldStartPlaying)
             }
         }
+        lastPickerLaunchMode = null
+        lastPickerLaunchRealtimeMs = 0L
     }
 
     val openDocumentVideoLauncher = rememberLauncherForActivityResult(OpenDocument()) { uri ->
@@ -1623,11 +1638,22 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     }
 
     fun launchVideoPicker() {
+        lastPickerLaunchMode = videoPickerMode
+        lastPickerLaunchRealtimeMs = android.os.SystemClock.elapsedRealtime()
+        android.util.Log.i(
+            "ControlCast",
+            "launchVideoPicker requestedMode=$videoPickerMode",
+        )
         when (videoPickerMode) {
             VideoPickerMode.DOCUMENTS -> openDocumentVideoLauncher.launch(arrayOf("video/*"))
             VideoPickerMode.GALLERY -> getContentVideoLauncher.launch("video/*")
-            VideoPickerMode.MODERN ->
-                pickVisualMediaLauncher.launch(PickVisualMediaRequest(PickVisualMedia.VideoOnly))
+            VideoPickerMode.MODERN -> {
+                android.util.Log.w(
+                    "ControlCast",
+                    "launchVideoPicker: MODERN requested but using GALLERY fallback due to photopicker result-delivery instability",
+                )
+                getContentVideoLauncher.launch("video/*")
+            }
         }
     }
 
