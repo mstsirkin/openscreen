@@ -195,7 +195,8 @@ void EnsureTaskRunner(ControllerState& state) {
 
 void StartCastSessionOnTaskRunner(ControllerState& state,
                                   openscreen::IPEndpoint endpoint,
-                                  const std::string& video_path) {
+                                  const std::string& video_path,
+                                  const std::string& restart_reason) {
   long long position_ms = 0;
   bool playing = false;
   float zoom = 1.0f;
@@ -223,7 +224,10 @@ void StartCastSessionOnTaskRunner(ControllerState& state,
   // Bump generation before destroying the old agent so its session-ended
   // callback is treated as stale and does not schedule a reconnect retry.
   const uint64_t agent_generation = ++state.connection.cast_generation;
-  LOGI("TaskRunner: stopping old agent");
+  LOGI("TaskRunner: stopping old agent reason=%s target=%s file=%s old_gen=%llu new_gen=%llu",
+       restart_reason.c_str(), endpoint.ToString().c_str(), video_path.c_str(),
+       static_cast<unsigned long long>(agent_generation - 1),
+       static_cast<unsigned long long>(agent_generation));
   // Properly destroy the old agent. Its encoder destructor joins
   // the encode thread, so no more tasks will be posted after this.
   state.connection.cast.reset();
@@ -369,7 +373,8 @@ void RequestCastSessionRestart(ControllerState& state, const char* reason) {
         state.connection.session_restart_posted = false;
         return;
       }
-      StartCastSessionOnTaskRunner(state, endpoint, current_video_path);
+      StartCastSessionOnTaskRunner(state, endpoint, current_video_path,
+                                  restart_reason);
 
       bool needs_another_pass = false;
       {

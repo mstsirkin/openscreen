@@ -9,7 +9,10 @@
 #include <openssl/ssl.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <errno.h>
+#include <sys/socket.h>
 
+#include <cstring>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -63,7 +66,7 @@ void ClearOpenSSLERRStack(const Location& location) {
 // General note about SSL errors. Error messages are pushed to the general
 // OpenSSL error queue. Call ClearOpenSSLERRStack before calling any
 // SSL methods.
-Error GetSSLError(const SSL* ssl, int return_code) {
+Error GetSSLError(const SSL* ssl, int return_code, const char* operation) {
   const int error_code = SSL_get_error(ssl, return_code);
   if (error_code == SSL_ERROR_NONE) {
     return Error::None();
@@ -73,6 +76,27 @@ Error GetSSLError(const SSL* ssl, int return_code) {
   std::stringstream msg;
   msg << "boringssl error (" << error_code
       << "): " << SSL_error_description(error_code);
+  if (operation && operation[0] != '\0') {
+    msg << " | op=" << operation;
+  }
+  msg << " | rc=" << return_code;
+  msg << " | shutdown=" << SSL_get_shutdown(ssl);
+  const int saved_errno = errno;
+  if (saved_errno != 0) {
+    msg << " | errno=" << saved_errno << " (" << std::strerror(saved_errno)
+        << ")";
+  }
+  const int fd = SSL_get_fd(ssl);
+  if (fd >= 0) {
+    int so_error = 0;
+    socklen_t opt_len = sizeof(so_error);
+    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &opt_len) == 0) {
+      msg << " | so_error=" << so_error;
+      if (so_error != 0) {
+        msg << " (" << std::strerror(so_error) << ")";
+      }
+    }
+  }
   while (uint32_t packed_error = ERR_get_error()) {
     msg << "\nerr stack: " << ERR_reason_error_string(packed_error);
   }

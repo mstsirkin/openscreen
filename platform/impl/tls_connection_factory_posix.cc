@@ -274,7 +274,8 @@ void TlsConnectionFactoryPosix::Connect(
   ClearOpenSSLERRStack(CURRENT_LOCATION);
   const int connection_status = SSL_connect(connection->ssl_.get());
   if (connection_status != 1) {
-    Error error = GetSSLError(connection->ssl_.get(), connection_status);
+    Error error =
+        GetSSLError(connection->ssl_.get(), connection_status, "SSL_connect");
     if (error.code() == Error::Code::kAgain) {
       static int retry_log_budget = 32;
       if (retry_log_budget > 0) {
@@ -330,7 +331,8 @@ void TlsConnectionFactoryPosix::Accept(
   ClearOpenSSLERRStack(CURRENT_LOCATION);
   const int connection_status = SSL_accept(connection->ssl_.get());
   if (connection_status != 1) {
-    Error error = GetSSLError(connection->ssl_.get(), connection_status);
+    Error error =
+        GetSSLError(connection->ssl_.get(), connection_status, "SSL_accept");
     if (error.code() == Error::Code::kAgain) {
       task_runner_.PostTask([weak_this = weak_factory_.GetWeakPtr(),
                              conn = std::move(connection)]() mutable {

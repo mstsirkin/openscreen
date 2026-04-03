@@ -29,7 +29,7 @@ void EnsureOpenSSLCleanup();
 // cases you should pass CURRENT_LOCATION as the `location`.
 void ClearOpenSSLERRStack(const Location& location);
 
-Error GetSSLError(const SSL* ssl, int return_code);
+Error GetSSLError(const SSL* ssl, int return_code, const char* operation = nullptr);
 
 // Place an instance of this class on the call stack to automatically clear
 // the OpenSSL error stack on function exit.
