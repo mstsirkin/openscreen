@@ -674,20 +674,30 @@ class Connection(private val backend: NativeBackedBackend) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var monitorJob: Job? = null
+    private var expectedRestartUntilRealtimeMs = 0L
+
+    private fun isExpectingRestart(): Boolean =
+        target != null && android.os.SystemClock.elapsedRealtime() < expectedRestartUntilRealtimeMs
+
     private val nativeStateListener: (Boolean, Boolean, String) -> Unit =
         { connected, _, statusText ->
             if (connected) {
                 state = State.CONNECTED
                 lastError = 0
+                expectedRestartUntilRealtimeMs = 0L
                 if (target == null) {
                     parseConnectedTarget(statusText)?.let { recoveredTarget ->
                         target = debugTargetToCastDevice(recoveredTarget)
                     }
                 }
             } else if (statusText.startsWith("Not connected.")) {
-                state = State.DISCONNECTED
-                if (target != null) {
-                    lastError = OsConstants.ENOTCONN
+                if (isExpectingRestart()) {
+                    state = State.CONNECTING
+                } else {
+                    state = State.DISCONNECTED
+                    if (target != null) {
+                        lastError = OsConstants.ENOTCONN
+                    }
                 }
             } else if (target != null && state == State.CONNECTING) {
                 state = State.CONNECTING
@@ -712,6 +722,7 @@ class Connection(private val backend: NativeBackedBackend) {
                 if (connected) {
                     state = State.CONNECTED
                     lastError = 0
+                    expectedRestartUntilRealtimeMs = 0L
                     if (target == null) {
                         parseConnectedTarget(backend.status.value)?.let { recoveredTarget ->
                             target = debugTargetToCastDevice(recoveredTarget)
@@ -720,9 +731,13 @@ class Connection(private val backend: NativeBackedBackend) {
                     continue
                 }
                 if (backend.status.value.startsWith("Not connected.")) {
-                    state = State.DISCONNECTED
-                    if (target != null) {
-                        lastError = OsConstants.ENOTCONN
+                    if (isExpectingRestart()) {
+                        state = State.CONNECTING
+                    } else {
+                        state = State.DISCONNECTED
+                        if (target != null) {
+                            lastError = OsConstants.ENOTCONN
+                        }
                     }
                     continue
                 }
@@ -806,6 +821,11 @@ class Connection(private val backend: NativeBackedBackend) {
             startPositionMs,
             startPlaying,
         )
+        if (target != null) {
+            expectedRestartUntilRealtimeMs =
+                android.os.SystemClock.elapsedRealtime() + 3000L
+            state = State.CONNECTING
+        }
     }
 
     fun openVideoDebugPath(
@@ -822,6 +842,11 @@ class Connection(private val backend: NativeBackedBackend) {
             startPositionMs,
             startPlaying,
         )
+        if (target != null) {
+            expectedRestartUntilRealtimeMs =
+                android.os.SystemClock.elapsedRealtime() + 3000L
+            state = State.CONNECTING
+        }
     }
 
     fun play() {
