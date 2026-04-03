@@ -960,6 +960,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         mutableStateOf(getAutoReconnectTargets(context))
     }
     var castOpenedUri by rememberSaveable { mutableStateOf<String?>(null) }
+    var castOpenRestartPending by rememberSaveable { mutableStateOf(false) }
     var reconnectResumeArmed by rememberSaveable { mutableStateOf(false) }
     var reconnectResumeUri by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingSharedUri by rememberSaveable { mutableStateOf<Uri?>(null) }
@@ -999,6 +1000,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             "ControlCast",
             "openSelectedVideoOnCast uri=$uri startPlaying=$startPlaying startPositionMs=$startPositionMs castOpenedUri=$castOpenedUri connectionState=$connectionState",
         )
+        castOpenedUri = uri.toString()
+        castOpenRestartPending = true
         connection.openVideo(
             context,
             uri,
@@ -1006,7 +1009,6 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             startPositionMs,
             startPlaying,
         )
-        castOpenedUri = uri.toString()
     }
 
     // Connect to a device and optionally send the current video.
@@ -1203,6 +1205,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                     startPlaying,
                 )
                 castOpenedUri = effectiveUri.toString()
+                castOpenRestartPending = true
             } else {
                 openSelectedVideoOnCast(effectiveUri, startPlaying, positionMs)
             }
@@ -1287,9 +1290,11 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         if (connectionState == Connection.State.DISCONNECTED) {
             android.util.Log.i(
                 "ControlCast",
-                "connectionState DISCONNECTED: clearing castOpenedUri old=$castOpenedUri selectedUri=$selectedUri isPlaying=$isPlaying",
+                "connectionState DISCONNECTED: castOpenedUri=$castOpenedUri pendingRestart=$castOpenRestartPending selectedUri=$selectedUri isPlaying=$isPlaying",
             )
-            castOpenedUri = null
+            if (!castOpenRestartPending) {
+                castOpenedUri = null
+            }
             val currentUri = selectedUri?.toString()
             if (isPlaying && currentUri != null) {
                 reconnectResumeArmed = true
@@ -1297,6 +1302,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 exoPlayer.pause()
                 isPlaying = false
             } else if (currentUri == null) {
+                castOpenRestartPending = false
                 reconnectResumeArmed = false
                 reconnectResumeUri = null
             }
@@ -1361,6 +1367,9 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                     "ControlCast",
                     "connected effect uri=$uriString castOpenedUri=$castOpenedUri shouldResumeAfterReconnect=$shouldResumeAfterReconnect shouldPlayPendingExternal=$shouldPlayPendingExternal exoPlaying=${exoPlayer.isPlaying} reconnectResumeArmed=$reconnectResumeArmed",
                 )
+                if (castOpenedUri == uriString) {
+                    castOpenRestartPending = false
+                }
                 if (castOpenedUri != uriString) {
                     openSelectedVideoOnCast(
                         uri,
