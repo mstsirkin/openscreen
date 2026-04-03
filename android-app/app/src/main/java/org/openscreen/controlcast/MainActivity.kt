@@ -1373,7 +1373,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         }
     }
 
-    LaunchedEffect(activity, discoveredDevices, connectionState, connectedDevice, selectedUri) {
+    LaunchedEffect(activity) {
         val debugFlow = activity?.debugCommandsFlow() ?: return@LaunchedEffect
         debugFlow.collect { command ->
             when (command) {
