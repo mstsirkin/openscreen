@@ -1188,7 +1188,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         startPositionMs: Long,
     ) {
         val effectiveUri = uri ?: filePath?.let { Uri.fromFile(java.io.File(it)) } ?: return
-        pendingExternalPlayUri = null
+        pendingExternalPlayUri = effectiveUri.toString().takeIf { startPlaying }
         reconnectResumeArmed = false
         reconnectResumeUri = effectiveUri.toString()
         selectedUri = effectiveUri
@@ -1382,6 +1382,9 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 )
                 if (castOpenedUri == uriString) {
                     castOpenRestartPending = false
+                    if (shouldPlayPendingExternal) {
+                        pendingExternalPlayUri = null
+                    }
                 }
                 if (castOpenedUri != uriString) {
                     openSelectedVideoOnCast(
