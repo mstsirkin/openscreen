@@ -741,6 +741,14 @@ class Connection(private val backend: NativeBackedBackend) {
             lastError = OsConstants.EINVAL
             return Result.failure(IllegalArgumentException("Blank cast target"))
         }
+        if (target?.target == device.target && state != State.DISCONNECTED) {
+            backend.syncStatus()
+            if (backend.status.value.startsWith("Connected to ")) {
+                state = State.CONNECTED
+                lastError = 0
+            }
+            return Result.success(Unit)
+        }
         target = device
         state = State.CONNECTING
         lastError = 0
