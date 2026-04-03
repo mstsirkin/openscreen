@@ -712,6 +712,11 @@ class Connection(private val backend: NativeBackedBackend) {
                 if (connected) {
                     state = State.CONNECTED
                     lastError = 0
+                    if (target == null) {
+                        parseConnectedTarget(backend.status.value)?.let { recoveredTarget ->
+                            target = debugTargetToCastDevice(recoveredTarget)
+                        }
+                    }
                     continue
                 }
                 if (backend.status.value.startsWith("Not connected.")) {
@@ -1130,12 +1135,14 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         val castPos = connection.getCastPositionMs()
         val exoPos = exoPlayer.currentPosition.coerceAtLeast(0L)
         val now = android.os.SystemClock.elapsedRealtime()
+        val liveConnectionState = connection.state
+        val liveConnectedDevice = connection.target
         android.util.Log.i(
             "ControlCast",
             buildString {
                 append("DEBUG_PRINT reason=").append(reason)
-                append(" connection=").append(connectionState)
-                append(" target=").append(connectedDevice?.target ?: "")
+                append(" connection=").append(liveConnectionState)
+                append(" target=").append(liveConnectedDevice?.target ?: "")
                 append(" selectedUri=").append(selectedUri ?: "")
                 append(" isPlaying=").append(isPlaying)
                 append(" exoPos=").append(exoPos)
