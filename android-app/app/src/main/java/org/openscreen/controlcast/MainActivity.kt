@@ -1575,12 +1575,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
 
     fun handlePickedVideo(uri: Uri?, persistable: Boolean) {
         if (uri != null) {
-            pendingExternalPlayUri = null
-            val shouldStartPlaying = if (connectionState == Connection.State.CONNECTED) {
-                connection.isCastPlaying()
-            } else {
-                localMirrorEnabled
-            }
+            val shouldStartPlaying = true
+            pendingExternalPlayUri = uri.toString()
             reconnectResumeArmed = false
             reconnectResumeUri = uri.toString()
             if (persistable) {
