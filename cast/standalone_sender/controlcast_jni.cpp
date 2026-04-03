@@ -81,6 +81,7 @@ struct ControllerState {
   int brightness = 0;
   long long av_sync_offset_ms = 0;
   int playout_delay_ms = 400;
+  int connect_timeout_ms = 8000;
   std::string active_mode = "idle";
   std::string debug_state;
   std::string status = "Native backend ready.";
@@ -307,12 +308,15 @@ void StartCastSessionOnTaskRunner(ControllerState& state,
       std::chrono::milliseconds(state.av_sync_offset_ms);
   settings.playout_delay =
       std::chrono::milliseconds(state.playout_delay_ms);
+  settings.connect_timeout =
+      std::chrono::milliseconds(state.connect_timeout_ms);
   settings.brightness = std::clamp(state.brightness, -200, 200);
   settings.enable_video_passthrough = state.enable_video_passthrough;
 
-  LOGI("TaskRunner: connecting buf=%dms avsync=%lldms brightness=%d pt=%d file=%s",
+  LOGI("TaskRunner: connecting buf=%dms avsync=%lldms timeout=%dms brightness=%d pt=%d file=%s",
        state.playout_delay_ms,
        (long long)state.av_sync_offset_ms,
+       state.connect_timeout_ms,
        state.brightness,
        state.enable_video_passthrough ? 1 : 0,
        video_path.c_str());
@@ -901,6 +905,18 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeSetPlayoutDelay(
   state.playout_delay_ms = std::max(100, (int)delay_ms);
   LOGI("Playout delay set to %d ms (takes effect on next session)",
        state.playout_delay_ms);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_org_openscreen_controlcast_NativeBackedBackend_nativeSetConnectTimeoutMs(
+    JNIEnv* env,
+    jobject thiz,
+    jint timeout_ms) {
+  auto& state = State();
+  std::lock_guard<std::mutex> lock(state.mutex);
+  state.connect_timeout_ms = std::max(1000, static_cast<int>(timeout_ms));
+  LOGI("Connect timeout set to %d ms (takes effect on next session)",
+       state.connect_timeout_ms);
 }
 
 extern "C" JNIEXPORT void JNICALL

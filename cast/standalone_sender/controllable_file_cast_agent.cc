@@ -24,7 +24,6 @@ constexpr char kJsonKeyPlayerState[] = "playerState";
 constexpr char kJsonKeyIdleReason[] = "idleReason";
 constexpr char kJsonKeyMediaSessionId[] = "mediaSessionId";
 constexpr char kJsonKeyCurrentTime[] = "currentTime";
-constexpr auto kConnectTimeout = std::chrono::seconds(8);
 }  // namespace
 
 ControllableFileCastAgent::ControllableFileCastAgent(
@@ -57,7 +56,7 @@ void ControllableFileCastAgent::Connect(ConnectionSettings settings) {
           Shutdown("connect_timeout");
         }
       },
-      kConnectTimeout);
+      connection_settings_->connect_timeout);
   const auto policy = connection_settings_->should_include_video
                           ? DeviceMediaPolicy::kIncludesVideo
                           : DeviceMediaPolicy::kAudioOnly;

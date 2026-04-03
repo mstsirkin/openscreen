@@ -68,6 +68,10 @@ struct ConnectionSettings {
   // requires transcode rather than passthrough.
   int brightness = 0;
 
+  // Maximum time to allow the initial Cast connection setup to complete
+  // before treating it as stalled and shutting the session down.
+  Clock::duration connect_timeout = std::chrono::seconds(8);
+
   // Whether direct video passthrough is allowed at all. Disabled by default
   // so the app stays on the fallback transcode path unless explicitly enabled.
   bool enable_video_passthrough = false;

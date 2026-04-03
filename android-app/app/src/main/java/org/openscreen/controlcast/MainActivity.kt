@@ -90,7 +90,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 
 sealed interface DebugCommand {
-    data class Connect(val target: String) : DebugCommand
+    data class Connect(val target: String, val timeoutMs: Int?) : DebugCommand
     data object Disconnect : DebugCommand
     data class OpenVideo(
         val uri: Uri?,
@@ -122,7 +122,12 @@ private fun parseLongListExtra(raw: String?): List<Long> =
 private fun Intent.toDebugCommand(): DebugCommand? {
     return when (action) {
         "org.openscreen.controlcast.DEBUG_CONNECT" ->
-            getStringExtra("target")?.takeIf { it.isNotBlank() }?.let(DebugCommand::Connect)
+            getStringExtra("target")?.takeIf { it.isNotBlank() }?.let {
+                DebugCommand.Connect(
+                    target = it,
+                    timeoutMs = if (hasExtra("timeout_ms")) getIntExtra("timeout_ms", 0) else null,
+                )
+            }
         "org.openscreen.controlcast.DEBUG_DISCONNECT" -> DebugCommand.Disconnect
         "org.openscreen.controlcast.DEBUG_OPEN_VIDEO" -> {
             val filePath = getStringExtra("file_path")?.trim()?.takeIf { it.isNotEmpty() }
@@ -560,6 +565,11 @@ class NativeBackedBackend : CastControlBackend {
         refreshStatus()
     }
 
+    fun setConnectTimeoutMs(timeoutMs: Int) {
+        nativeSetConnectTimeoutMs(timeoutMs)
+        refreshStatus()
+    }
+
     fun setHwEncode(enabled: Boolean) {
         nativeSetHwEncode(enabled)
         refreshStatus()
@@ -631,6 +641,7 @@ class NativeBackedBackend : CastControlBackend {
     private external fun nativeIsPlaying(): Boolean
     private external fun nativeIsConnected(): Boolean
     private external fun nativeSetAvSyncOffset(offsetMs: Long)
+    private external fun nativeSetConnectTimeoutMs(timeoutMs: Int)
     private external fun nativeSetHwEncode(enabled: Boolean)
     private external fun nativeSetVideoPassthroughEnabled(enabled: Boolean)
     private external fun nativeSetBrightness(brightness: Int)
@@ -816,6 +827,10 @@ class Connection(private val backend: NativeBackedBackend) {
         backend.updateViewport(viewport)
     }
 
+    fun setConnectTimeoutMs(timeoutMs: Int) {
+        backend.setConnectTimeoutMs(timeoutMs)
+    }
+
     fun getCastPositionMs(): Long = backend.getCastPositionMs()
 
     fun getCastDurationMs(): Long = backend.getCastDurationMs()
@@ -914,6 +929,9 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var videoPassthroughEnabled by rememberSaveable {
         mutableStateOf(prefs.getBoolean("video_passthrough_enabled", false))
     }
+    var connectTimeoutMs by rememberSaveable {
+        mutableIntStateOf(prefs.getInt("connect_timeout_ms", 8000))
+    }
     var videoPickerMode by rememberSaveable {
         mutableStateOf(videoPickerModeFromPref(prefs.getString("video_picker_mode", null)))
     }
@@ -958,6 +976,10 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             "Connecting to ${connectedDevice?.target ?: connectedDevice?.name ?: "device"}"
         Connection.State.CONNECTED ->
             "Connected to ${connectedDevice?.target ?: connectedDevice?.name ?: "device"}"
+    }
+
+    LaunchedEffect(connectTimeoutMs) {
+        connection.setConnectTimeoutMs(connectTimeoutMs)
     }
 
     fun openSelectedVideoOnCast(uri: Uri, startPlaying: Boolean, startPositionMs: Long = 0L) {
@@ -1011,10 +1033,21 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         backend.setHwEncode(enabled)
     }
 
+    fun setConnectTimeoutMs(timeoutMs: Int) {
+        backend.setConnectTimeoutMs(timeoutMs)
+    }
+
     fun setVideoPassthroughEnabled(enabled: Boolean) {
         videoPassthroughEnabled = enabled
         prefs.edit().putBoolean("video_passthrough_enabled", enabled).apply()
         backend.setVideoPassthroughEnabled(enabled)
+    }
+
+    fun persistConnectTimeoutMs(timeoutMs: Int) {
+        val clamped = timeoutMs.coerceAtLeast(1000)
+        connectTimeoutMs = clamped
+        prefs.edit().putInt("connect_timeout_ms", clamped).apply()
+        connection.setConnectTimeoutMs(clamped)
     }
 
     fun setBrightnessLevel(level: Int) {
@@ -1345,6 +1378,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         debugFlow.collect { command ->
             when (command) {
                 is DebugCommand.Connect -> {
+                    command.timeoutMs?.let { persistConnectTimeoutMs(it) }
                     val device = discoveredDevices.firstOrNull { it.target == command.target }
                     if (device != null) {
                         connectToDevice(device)
@@ -1840,6 +1874,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                     coroutineScope,
                     brightnessLevel,
                     ::setBrightnessLevel,
+                    connectTimeoutMs,
+                    ::persistConnectTimeoutMs,
                 )
             }
         } else {
@@ -1965,6 +2001,8 @@ private fun SettingsRow(
     coroutineScope: kotlinx.coroutines.CoroutineScope,
     brightnessLevel: Int,
     onBrightnessChange: (Int) -> Unit,
+    connectTimeoutMs: Int,
+    onConnectTimeoutChange: (Int) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(
@@ -1981,6 +2019,26 @@ private fun SettingsRow(
                         bufferText.toIntOrNull()?.let { backend.setPlayoutDelay(it) }
                     },
                     modifier = Modifier.width(80.dp),
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        color = Color(0xFFD9E2EC),
+                        fontSize = 14.sp,
+                    ),
+                    singleLine = true,
+                )
+                Text("ms", color = Color(0xFF6B7F8E), style = MaterialTheme.typography.labelSmall)
+            }
+            var timeoutText by rememberSaveable(connectTimeoutMs) {
+                mutableStateOf(connectTimeoutMs.toString())
+            }
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("Connect", color = Color(0xFF6B7F8E), style = MaterialTheme.typography.labelSmall)
+                androidx.compose.material3.OutlinedTextField(
+                    value = timeoutText,
+                    onValueChange = { new ->
+                        timeoutText = new.filter { it.isDigit() }
+                        timeoutText.toIntOrNull()?.let { onConnectTimeoutChange(it) }
+                    },
+                    modifier = Modifier.width(88.dp),
                     textStyle = androidx.compose.ui.text.TextStyle(
                         color = Color(0xFFD9E2EC),
                         fontSize = 14.sp,
