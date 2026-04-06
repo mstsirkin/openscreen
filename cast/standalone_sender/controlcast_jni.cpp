@@ -80,7 +80,7 @@ struct ControllerState {
   bool enable_video_passthrough = false;
   int brightness = 0;
   long long av_sync_offset_ms = 0;
-  int playout_delay_ms = 800;
+  int playout_delay_ms = 400;
   int connect_timeout_ms = 8000;
   std::string active_mode = "idle";
   std::string debug_state;

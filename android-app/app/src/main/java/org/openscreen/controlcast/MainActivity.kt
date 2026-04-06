@@ -957,7 +957,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         mutableStateOf(prefs.getBoolean("video_passthrough_enabled", false))
     }
     var playoutDelayMs by rememberSaveable {
-        mutableIntStateOf(prefs.getInt("playout_delay_ms", 800))
+        mutableIntStateOf(prefs.getInt("playout_delay_ms", 400))
     }
     var connectTimeoutMs by rememberSaveable {
         mutableIntStateOf(prefs.getInt("connect_timeout_ms", 8000))

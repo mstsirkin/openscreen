@@ -54,7 +54,7 @@ struct ConnectionSettings {
 
   // Playout delay: how long the receiver buffers before rendering.
   // Lower = more responsive, higher = more resilient to network jitter.
-  Clock::duration playout_delay = std::chrono::milliseconds(800);
+  Clock::duration playout_delay = std::chrono::milliseconds(400);
 
   // Audio-video sync offset: shifts audio reference_time earlier by this
   // amount to compensate for the receiver's audio/video render latency
