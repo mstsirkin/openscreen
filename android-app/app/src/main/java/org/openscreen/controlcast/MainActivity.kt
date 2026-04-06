@@ -1003,6 +1003,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     val connectedDevice = connection.target
     val isConnected = connectionState == Connection.State.CONNECTED
     val isConnecting = connectionState == Connection.State.CONNECTING
+    val hasLiveCastSession = isConnected && backend.isConnected()
     val connectionStatusText = when (connectionState) {
         Connection.State.DISCONNECTED ->
             connectedDevice?.target?.let { "Not connected. Target: $it" } ?: "Not connected."
@@ -1241,7 +1242,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         startPositionMs: Long,
     ) {
         val effectiveUri = uri ?: filePath?.let { Uri.fromFile(java.io.File(it)) } ?: return
-        val stagingReconnect = connectedDevice != null && connectionState != Connection.State.CONNECTED
+        val stagingReconnect = connectedDevice != null && !hasLiveCastSession
         pendingExternalPlayUri = effectiveUri.toString().takeIf { startPlaying }
         reconnectResumeArmed = false
         reconnectResumeUri = effectiveUri.toString()
@@ -1623,8 +1624,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         )
         if (uri != null) {
             val shouldStartPlaying = true
-            val openingWhileConnected = connectionState == Connection.State.CONNECTED
-            val stagingReconnect = connectedDevice != null && connectionState != Connection.State.CONNECTED
+            val openingWhileConnected = hasLiveCastSession
+            val stagingReconnect = connectedDevice != null && !hasLiveCastSession
             pendingExternalPlayUri = uri.toString()
             reconnectResumeArmed = false
             reconnectResumeUri = uri.toString()
