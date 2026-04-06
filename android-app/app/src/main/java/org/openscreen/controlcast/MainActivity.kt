@@ -1176,12 +1176,20 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     fun playBoth() {
         pendingExternalPlayUri = null
         connection.play()
-        if (localMirrorEnabled) {
-            exoPlayer.play()
-        } else {
+        if (connectionState == Connection.State.CONNECTED) {
+            // While Cast is connected, native playback state is authoritative.
+            // Do not start local preview optimistically or it can run alone if
+            // the receiver stays paused at EOF.
             exoPlayer.pause()
+            isPlaying = false
+        } else {
+            if (localMirrorEnabled) {
+                exoPlayer.play()
+            } else {
+                exoPlayer.pause()
+            }
+            isPlaying = true
         }
-        isPlaying = true
         reconnectResumeArmed = false
     }
 
