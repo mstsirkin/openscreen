@@ -763,11 +763,11 @@ class Connection(private val backend: NativeBackedBackend) {
         }
     }
 
-    suspend fun connect(device: CastDevice): Result<Unit> {
+    fun beginConnect(device: CastDevice): Boolean {
         if (device.target.isBlank()) {
             state = State.DISCONNECTED
             lastError = OsConstants.EINVAL
-            return Result.failure(IllegalArgumentException("Blank cast target"))
+            return false
         }
         if (target?.target == device.target && state != State.DISCONNECTED) {
             backend.syncStatus()
@@ -775,11 +775,30 @@ class Connection(private val backend: NativeBackedBackend) {
                 state = State.CONNECTED
                 lastError = 0
             }
-            return Result.success(Unit)
+            return false
         }
         target = device
         state = State.CONNECTING
         lastError = 0
+        return true
+    }
+
+    suspend fun connect(device: CastDevice): Result<Unit> {
+        if (device.target.isBlank()) {
+            state = State.DISCONNECTED
+            lastError = OsConstants.EINVAL
+            return Result.failure(IllegalArgumentException("Blank cast target"))
+        }
+        if (target?.target != device.target || state == State.DISCONNECTED) {
+            beginConnect(device)
+        } else if (state != State.CONNECTING) {
+            backend.syncStatus()
+            if (backend.status.value.startsWith("Connected to ")) {
+                state = State.CONNECTED
+                lastError = 0
+            }
+            return Result.success(Unit)
+        }
         android.util.Log.i("ControlCast", "connect(): starting backend connect target=${device.target}")
         val result = backend.connect(device.target)
         backend.syncStatus()
@@ -1087,8 +1106,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
 
     // Connect to a device and optionally send the current video.
     fun connectToDevice(device: CastDevice) {
-        if (connectedDevice?.target == device.target &&
-            connectionState != Connection.State.DISCONNECTED) {
+        if (!connection.beginConnect(device)) {
             return
         }
         coroutineScope.launch {
@@ -1503,12 +1521,10 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                     command.timeoutMs?.let { persistConnectTimeoutMs(it) }
                     val device = discoveredDevices.firstOrNull { it.target == command.target }
                     if (device != null) {
-                        connectToDevice(device)
+                        connection.connect(device)
                     } else {
                         debugTargetToCastDevice(command.target)?.let { parsed ->
-                            coroutineScope.launch {
-                                connection.connect(parsed)
-                            }
+                            connection.connect(parsed)
                         }
                     }
                 }
