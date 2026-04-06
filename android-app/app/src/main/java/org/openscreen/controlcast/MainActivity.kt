@@ -956,6 +956,9 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var videoPassthroughEnabled by rememberSaveable {
         mutableStateOf(prefs.getBoolean("video_passthrough_enabled", false))
     }
+    var playoutDelayMs by rememberSaveable {
+        mutableIntStateOf(prefs.getInt("playout_delay_ms", 800))
+    }
     var connectTimeoutMs by rememberSaveable {
         mutableIntStateOf(prefs.getInt("connect_timeout_ms", 8000))
     }
@@ -1013,6 +1016,40 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         connection.setConnectTimeoutMs(connectTimeoutMs)
     }
 
+    LaunchedEffect(playoutDelayMs) {
+        backend.setPlayoutDelay(playoutDelayMs)
+    }
+
+    fun pushSelectedVideoToCastSession(
+        uri: Uri,
+        startPlaying: Boolean,
+        startPositionMs: Long = 0L,
+        debugFilePath: String? = null,
+    ): Boolean {
+        if (connectedDevice == null) return false
+        castOpenedUri = uri.toString()
+        castOpenRestartPending = true
+        lastCastOpenRequestRealtimeMs = android.os.SystemClock.elapsedRealtime()
+        if (debugFilePath != null) {
+            connection.openVideoDebugPath(
+                context,
+                debugFilePath,
+                localMirrorEnabled,
+                startPositionMs,
+                startPlaying,
+            )
+        } else {
+            connection.openVideo(
+                context,
+                uri,
+                localMirrorEnabled,
+                startPositionMs,
+                startPlaying,
+            )
+        }
+        return true
+    }
+
     fun openSelectedVideoOnCast(uri: Uri, startPlaying: Boolean, startPositionMs: Long = 0L) {
         if (connectedDevice == null || connectionState != Connection.State.CONNECTED) return
         // Sync policy:
@@ -1025,16 +1062,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             "ControlCast",
             "openSelectedVideoOnCast uri=$uri startPlaying=$startPlaying startPositionMs=$startPositionMs castOpenedUri=$castOpenedUri connectionState=$connectionState",
         )
-        castOpenedUri = uri.toString()
-        castOpenRestartPending = true
-        lastCastOpenRequestRealtimeMs = android.os.SystemClock.elapsedRealtime()
-        connection.openVideo(
-            context,
-            uri,
-            localMirrorEnabled,
-            startPositionMs,
-            startPlaying,
-        )
+        pushSelectedVideoToCastSession(uri, startPlaying, startPositionMs)
     }
 
     // Connect to a device and optionally send the current video.
@@ -1081,6 +1109,13 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         connectTimeoutMs = clamped
         prefs.edit().putInt("connect_timeout_ms", clamped).apply()
         connection.setConnectTimeoutMs(clamped)
+    }
+
+    fun persistPlayoutDelayMs(delayMs: Int) {
+        val clamped = delayMs.coerceAtLeast(100)
+        playoutDelayMs = clamped
+        prefs.edit().putInt("playout_delay_ms", clamped).apply()
+        backend.setPlayoutDelay(clamped)
     }
 
     fun setBrightnessLevel(level: Int) {
@@ -1228,18 +1263,25 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         }
         if (connectionState == Connection.State.CONNECTED) {
             if (filePath != null) {
-                connection.openVideoDebugPath(
-                    context,
-                    filePath,
-                    localMirrorEnabled,
-                    positionMs,
+                pushSelectedVideoToCastSession(
+                    effectiveUri,
                     startPlaying,
+                    positionMs,
+                    debugFilePath = filePath,
                 )
-                castOpenedUri = effectiveUri.toString()
-                castOpenRestartPending = true
-                lastCastOpenRequestRealtimeMs = android.os.SystemClock.elapsedRealtime()
             } else {
                 openSelectedVideoOnCast(effectiveUri, startPlaying, positionMs)
+            }
+        } else if (connectedDevice != null) {
+            if (filePath != null) {
+                pushSelectedVideoToCastSession(
+                    effectiveUri,
+                    startPlaying,
+                    positionMs,
+                    debugFilePath = filePath,
+                )
+            } else {
+                pushSelectedVideoToCastSession(effectiveUri, startPlaying, positionMs)
             }
         }
     }
@@ -1278,6 +1320,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         if (connectionState == Connection.State.CONNECTED) {
             openSelectedVideoOnCast(uri, shouldStartPlaying, startPositionMs = 0L)
             pendingExternalPlayUri = null
+        } else if (connectedDevice != null) {
+            pushSelectedVideoToCastSession(uri, shouldStartPlaying, startPositionMs = 0L)
         }
     }
 
@@ -1606,6 +1650,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             isPlaying = shouldStartPlaying && !openingWhileConnected
             if (openingWhileConnected) {
                 openSelectedVideoOnCast(uri, shouldStartPlaying)
+            } else if (connectedDevice != null) {
+                pushSelectedVideoToCastSession(uri, shouldStartPlaying)
             }
         }
         lastPickerLaunchMode = null
@@ -1951,6 +1997,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                     coroutineScope,
                     brightnessLevel,
                     ::setBrightnessLevel,
+                    playoutDelayMs,
+                    ::persistPlayoutDelayMs,
                     connectTimeoutMs,
                     ::persistConnectTimeoutMs,
                 )
@@ -2078,6 +2126,8 @@ private fun SettingsRow(
     coroutineScope: kotlinx.coroutines.CoroutineScope,
     brightnessLevel: Int,
     onBrightnessChange: (Int) -> Unit,
+    playoutDelayMs: Int,
+    onPlayoutDelayChange: (Int) -> Unit,
     connectTimeoutMs: Int,
     onConnectTimeoutChange: (Int) -> Unit,
 ) {
@@ -2086,14 +2136,16 @@ private fun SettingsRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            var bufferText by rememberSaveable { mutableStateOf("400") }
+            var bufferText by rememberSaveable(playoutDelayMs) {
+                mutableStateOf(playoutDelayMs.toString())
+            }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("Buffer", color = Color(0xFF6B7F8E), style = MaterialTheme.typography.labelSmall)
                 androidx.compose.material3.OutlinedTextField(
                     value = bufferText,
                     onValueChange = { new ->
                         bufferText = new.filter { it.isDigit() }
-                        bufferText.toIntOrNull()?.let { backend.setPlayoutDelay(it) }
+                        bufferText.toIntOrNull()?.let { onPlayoutDelayChange(it) }
                     },
                     modifier = Modifier.width(80.dp),
                     textStyle = androidx.compose.ui.text.TextStyle(
