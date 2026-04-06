@@ -1241,6 +1241,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         startPositionMs: Long,
     ) {
         val effectiveUri = uri ?: filePath?.let { Uri.fromFile(java.io.File(it)) } ?: return
+        val stagingReconnect = connectedDevice != null && connectionState != Connection.State.CONNECTED
         pendingExternalPlayUri = effectiveUri.toString().takeIf { startPlaying }
         reconnectResumeArmed = false
         reconnectResumeUri = effectiveUri.toString()
@@ -1249,12 +1250,12 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         exoPlayer.setMediaItem(mediaItem)
         exoPlayer.prepare()
         exoPlayer.seekTo(startPositionMs.coerceAtLeast(0L))
-        if (localMirrorEnabled && startPlaying) {
+        if (localMirrorEnabled && startPlaying && !stagingReconnect) {
             exoPlayer.play()
         } else {
             exoPlayer.pause()
         }
-        isPlaying = startPlaying
+        isPlaying = startPlaying && !stagingReconnect
         positionMs = startPositionMs.coerceAtLeast(0L)
         sliderValue = if (durationMs > 0L) {
             positionMs.toFloat() / durationMs.toFloat()
@@ -1623,6 +1624,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         if (uri != null) {
             val shouldStartPlaying = true
             val openingWhileConnected = connectionState == Connection.State.CONNECTED
+            val stagingReconnect = connectedDevice != null && connectionState != Connection.State.CONNECTED
             pendingExternalPlayUri = uri.toString()
             reconnectResumeArmed = false
             reconnectResumeUri = uri.toString()
@@ -1640,14 +1642,15 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             val mediaItem = MediaItem.fromUri(uri)
             exoPlayer.setMediaItem(mediaItem)
             exoPlayer.prepare()
-            if (localMirrorEnabled && shouldStartPlaying && !openingWhileConnected) {
+            if (localMirrorEnabled && shouldStartPlaying &&
+                !openingWhileConnected && !stagingReconnect) {
                 exoPlayer.play()
             } else {
                 exoPlayer.pause()
             }
             // During an in-place Cast reopen, keep local preview paused until the
             // new Cast session becomes authoritative again.
-            isPlaying = shouldStartPlaying && !openingWhileConnected
+            isPlaying = shouldStartPlaying && !openingWhileConnected && !stagingReconnect
             if (openingWhileConnected) {
                 openSelectedVideoOnCast(uri, shouldStartPlaying)
             } else if (connectedDevice != null) {
