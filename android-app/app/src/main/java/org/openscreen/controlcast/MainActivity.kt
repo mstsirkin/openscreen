@@ -2,6 +2,7 @@ package org.openscreen.controlcast
 
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
@@ -206,6 +207,20 @@ private enum class VideoPickerMode {
 
 private fun videoPickerModeFromPref(raw: String?): VideoPickerMode {
     return VideoPickerMode.entries.firstOrNull { it.name == raw } ?: VideoPickerMode.DOCUMENTS
+}
+
+private fun loadInitialPlayoutDelayMs(prefs: SharedPreferences): Int {
+    val stored = prefs.getInt("playout_delay_ms", 400)
+    val customized = prefs.getBoolean("playout_delay_ms_customized", false)
+    if (!customized && stored == 800) {
+        prefs.edit().putInt("playout_delay_ms", 400).apply()
+        android.util.Log.i(
+            "ControlCast",
+            "Migrated legacy default playout delay from 800ms to 400ms",
+        )
+        return 400
+    }
+    return stored
 }
 
 class MainActivity : ComponentActivity() {
@@ -957,7 +972,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         mutableStateOf(prefs.getBoolean("video_passthrough_enabled", false))
     }
     var playoutDelayMs by rememberSaveable {
-        mutableIntStateOf(prefs.getInt("playout_delay_ms", 400))
+        mutableIntStateOf(loadInitialPlayoutDelayMs(prefs))
     }
     var connectTimeoutMs by rememberSaveable {
         mutableIntStateOf(prefs.getInt("connect_timeout_ms", 8000))
@@ -1119,7 +1134,10 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     fun persistPlayoutDelayMs(delayMs: Int) {
         val clamped = delayMs.coerceAtLeast(100)
         playoutDelayMs = clamped
-        prefs.edit().putInt("playout_delay_ms", clamped).apply()
+        prefs.edit()
+            .putInt("playout_delay_ms", clamped)
+            .putBoolean("playout_delay_ms_customized", true)
+            .apply()
         backend.setPlayoutDelay(clamped)
     }
 
