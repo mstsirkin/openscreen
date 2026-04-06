@@ -220,7 +220,6 @@ void StartCastSessionOnTaskRunner(ControllerState& state,
   if (state.connection.reconnect_alarm) {
     state.connection.reconnect_alarm->Cancel();
   }
-  state.connection.reconnect_delay = kInitialReconnectDelay;
   // Bump generation before destroying the old agent so its session-ended
   // callback is treated as stale and does not schedule a reconnect retry.
   const uint64_t agent_generation = ++state.connection.cast_generation;
@@ -513,6 +512,7 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeConnect(
     target_str = state.connection.target;
     video_path = state.video_path;
     state.connection.reconnect_enabled = true;
+    state.connection.reconnect_delay = kInitialReconnectDelay;
   }
 
 #ifdef HAVE_OPENSCREEN
@@ -589,6 +589,7 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeOpenVideo(
     state.pending_open_position_ms = state.position_ms;
     state.has_pending_open_position = true;
     state.connection.reconnect_enabled = true;
+    state.connection.reconnect_delay = kInitialReconnectDelay;
 
     if (fd1 >= 0 && fd2 >= 0) {
       // Dup both fds (Java's PFDs own the originals).
@@ -645,6 +646,7 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeOpenVideoPath(
     state.has_pending_open_position = true;
     state.video_path = JStringToStdString(env, file_path);
     state.connection.reconnect_enabled = true;
+    state.connection.reconnect_delay = kInitialReconnectDelay;
     target_str = state.connection.target;
     video_path = state.video_path;
     state.playing = start_playing == JNI_TRUE;
@@ -1017,6 +1019,9 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeGetStatus(
 #ifdef HAVE_OPENSCREEN
   if (state.connection.cast) {
     state.connection.connected = state.connection.cast->IsConnected();
+    if (state.connection.connected) {
+      state.connection.reconnect_delay = kInitialReconnectDelay;
+    }
     state.playing = state.connection.connected && state.connection.cast->IsPlaying();
     if (state.has_pending_open_position) {
       state.position_ms = state.pending_open_position_ms;
