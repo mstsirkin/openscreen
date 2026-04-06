@@ -129,6 +129,7 @@ val buildControlcastJniLib by tasks.registering(Exec::class) {
     commandLine("ninja", "-C", controlcastBuildDir.path, "libcontrolcast.so")
     inputs.file(controlcastBuildDir.resolve("build.ninja"))
     outputs.file(controlcastSo)
+    outputs.upToDateWhen { false }
     doFirst {
         require(controlcastBuildDir.resolve("build.ninja").exists()) {
             "Missing GN build files at ${controlcastBuildDir.path}/build.ninja. Configure the native build first."
