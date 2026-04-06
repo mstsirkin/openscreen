@@ -86,8 +86,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.receiveAsFlow
-import java.net.InetSocketAddress
-import java.net.Socket
 
 sealed interface DebugCommand {
     data class Connect(val target: String, val timeoutMs: Int?) : DebugCommand
@@ -767,27 +765,18 @@ class Connection(private val backend: NativeBackedBackend) {
         target = device
         state = State.CONNECTING
         lastError = 0
-        kotlinx.coroutines.withContext(Dispatchers.IO) {
-            runCatching {
-                Socket().use { socket ->
-                    socket.connect(InetSocketAddress(device.host, device.port), 3000)
-                    android.util.Log.i(
-                        "ControlCast",
-                        "JAVA_SOCKET_CONNECT success remote=${device.target} local=${socket.localAddress?.hostAddress}:${socket.localPort}",
-                    )
-                }
-            }.onFailure { error ->
-                android.util.Log.e(
-                    "ControlCast",
-                    "JAVA_SOCKET_CONNECT failed remote=${device.target} error=${error.javaClass.simpleName}: ${error.message}",
-                )
-            }
-        }
+        android.util.Log.i("ControlCast", "connect(): starting backend connect target=${device.target}")
         val result = backend.connect(device.target)
         backend.syncStatus()
         if (backend.status.value.startsWith("Connected to ")) {
             state = State.CONNECTED
             lastError = 0
+            android.util.Log.i("ControlCast", "connect(): backend connected target=${device.target}")
+        } else {
+            android.util.Log.w(
+                "ControlCast",
+                "connect(): backend connect incomplete target=${device.target} status=${backend.status.value}",
+            )
         }
         return result
     }
