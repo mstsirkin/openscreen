@@ -1547,11 +1547,15 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     LaunchedEffect(exoPlayer) {
         while (true) {
             val castConnected = connectionState == Connection.State.CONNECTED
+            val liveCastConnected = backend.isConnected()
             val castPos = connection.getCastPositionMs().coerceAtLeast(0L)
             val castDur = connection.getCastDurationMs().coerceAtLeast(0L)
             val castPlaying = connection.isCastPlaying()
             val exoPos = exoPlayer.currentPosition.coerceAtLeast(0L)
             val exoHasMedia = exoPlayer.mediaItemCount > 0
+            if (connectedDevice != null && !liveCastConnected && exoHasMedia) {
+                exoPlayer.pause()
+            }
             durationMs = if (castConnected && castDur > 0L) {
                 castDur
             } else if (exoHasMedia) {
@@ -1600,7 +1604,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 }
             }
             isPlaying = if (castConnected) {
-                castPlaying
+                liveCastConnected && castPlaying
             } else if (exoHasMedia) {
                 exoPlayer.isPlaying
             } else {
