@@ -1003,7 +1003,11 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     val connectedDevice = connection.target
     val isConnected = connectionState == Connection.State.CONNECTED
     val isConnecting = connectionState == Connection.State.CONNECTING
-    val hasLiveCastSession = isConnected && backend.isConnected()
+    val hasLiveCastSession =
+        isConnected &&
+            backend.isConnected() &&
+            !backendStatus.startsWith("Not connected.") &&
+            !backendStatus.contains("| no video selected")
     val connectionStatusText = when (connectionState) {
         Connection.State.DISCONNECTED ->
             connectedDevice?.target?.let { "Not connected. Target: $it" } ?: "Not connected."
@@ -1547,7 +1551,10 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     LaunchedEffect(exoPlayer) {
         while (true) {
             val castConnected = connectionState == Connection.State.CONNECTED
-            val liveCastConnected = backend.isConnected()
+            val liveCastConnected =
+                backend.isConnected() &&
+                    !backend.status.value.startsWith("Not connected.") &&
+                    !backend.status.value.contains("| no video selected")
             val castPos = connection.getCastPositionMs().coerceAtLeast(0L)
             val castDur = connection.getCastDurationMs().coerceAtLeast(0L)
             val castPlaying = connection.isCastPlaying()
