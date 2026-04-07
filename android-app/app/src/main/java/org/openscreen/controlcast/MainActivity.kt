@@ -1558,9 +1558,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                         pendingExternalPlayUri = null
                     }
                 }
-                if (shouldResumeAfterReconnect && localMirrorEnabled) {
-                    exoPlayer.play()
-                    isPlaying = true
+                if (shouldResumeAfterReconnect && !localMirrorEnabled) {
                     reconnectResumeArmed = false
                 }
             }
@@ -1675,6 +1673,11 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 val castStartedThisTick = castPlaying && !lastObservedCastPlaying
                 if (castStartedThisTick && castPos > 0L) {
                     exoPlayer.seekTo(castPos)
+                }
+                if (castPlaying &&
+                    reconnectResumeArmed &&
+                    reconnectResumeUri == selectedUri?.toString()) {
+                    reconnectResumeArmed = false
                 }
                 // After Cast is actively running, Cast becomes the authority for
                 // steady-state correction. This keeps local preview from drifting
