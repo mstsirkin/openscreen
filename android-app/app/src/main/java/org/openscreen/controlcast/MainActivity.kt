@@ -1075,6 +1075,9 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var pendingCastSeekTargetMs by remember { mutableLongStateOf(-1L) }
     var pendingCastSeekJob by remember { mutableStateOf<Job?>(null) }
     var lastObservedCastPlaying by remember { mutableStateOf(false) }
+    var lastObservedCastPosForPlayConfirm by remember { mutableLongStateOf(0L) }
+    var pendingCastPlayConfirmation by rememberSaveable { mutableStateOf(false) }
+    var pendingCastPlayBaselineMs by rememberSaveable { mutableLongStateOf(-1L) }
     var lastPickerLaunchMode by rememberSaveable { mutableStateOf<VideoPickerMode?>(null) }
     var lastPickerLaunchRealtimeMs by rememberSaveable { mutableLongStateOf(0L) }
     var lastNoRouteStatus by rememberSaveable { mutableStateOf<String?>(null) }
@@ -1213,6 +1216,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
 
     fun pauseBoth() {
         pendingExternalPlayUri = null
+        pendingCastPlayConfirmation = false
+        pendingCastPlayBaselineMs = -1L
         exoPlayer.pause()
         connection.pause()
         isPlaying = false
@@ -1226,6 +1231,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             // While Cast is connected, native playback state is authoritative.
             // Do not start local preview optimistically or it can run alone if
             // the receiver stays paused at EOF.
+            pendingCastPlayConfirmation = true
+            pendingCastPlayBaselineMs = connection.getCastPositionMs().coerceAtLeast(0L)
             exoPlayer.pause()
             isPlaying = false
         } else {
@@ -1659,6 +1666,11 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             val castPlaying = connection.isCastPlaying()
             val exoPos = exoPlayer.currentPosition.coerceAtLeast(0L)
             val exoHasMedia = exoPlayer.mediaItemCount > 0
+            val inferredCastPlaying =
+                pendingCastPlayConfirmation &&
+                    castPos > pendingCastPlayBaselineMs + 250L &&
+                    castPos > lastObservedCastPosForPlayConfirm
+            val effectiveCastPlaying = castPlaying || inferredCastPlaying
             if (connectedDevice != null && !liveCastConnected && exoHasMedia) {
                 exoPlayer.pause()
             }
@@ -1670,14 +1682,18 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 castDur
             }
             if (castConnected && exoHasMedia && restored) {
-                val castStartedThisTick = castPlaying && !lastObservedCastPlaying
+                val castStartedThisTick = effectiveCastPlaying && !lastObservedCastPlaying
                 if (castStartedThisTick && castPos > 0L) {
                     exoPlayer.seekTo(castPos)
                 }
-                if (castPlaying &&
+                if (effectiveCastPlaying &&
                     reconnectResumeArmed &&
                     reconnectResumeUri == selectedUri?.toString()) {
                     reconnectResumeArmed = false
+                }
+                if (effectiveCastPlaying) {
+                    pendingCastPlayConfirmation = false
+                    pendingCastPlayBaselineMs = -1L
                 }
                 // After Cast is actively running, Cast becomes the authority for
                 // steady-state correction. This keeps local preview from drifting
@@ -1689,7 +1705,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 if (!sliderDragging && castPos > 0L && driftMs > syncThresholdMs) {
                     exoPlayer.seekTo(castPos)
                 }
-                if (castPlaying) {
+                if (effectiveCastPlaying) {
                     if (localMirrorEnabled) {
                         exoPlayer.play()
                     } else {
@@ -1699,7 +1715,8 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                     exoPlayer.pause()
                 }
             }
-            lastObservedCastPlaying = castPlaying
+            lastObservedCastPlaying = effectiveCastPlaying
+            lastObservedCastPosForPlayConfirm = castPos
             if (!sliderDragging && restored) {
                 positionMs = if (castConnected && castPos > 0L) {
                     castPos
@@ -1715,11 +1732,11 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 }
             }
             isPlaying = if (castConnected) {
-                liveCastConnected && castPlaying
+                liveCastConnected && effectiveCastPlaying
             } else if (exoHasMedia) {
                 exoPlayer.isPlaying
             } else {
-                castPlaying
+                effectiveCastPlaying
             }
             delay(200)
         }
