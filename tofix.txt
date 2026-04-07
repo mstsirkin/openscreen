@@ -1,0 +1,5 @@
+Reconnect bug:
+- After transient `No route to host` failures, the app can reconnect to the Cast target in a paused-at-0s state.
+- `connected effect` may still honor `reconnectResumeArmed=true` and resume only local ExoPlayer even when `castPlaying=false`.
+- Symptom: TV shows first frame / paused image while local preview keeps playing.
+- Fix direction: gate reconnect resume on confirmed native `castPlaying=true`, similar to the Play-button fix.

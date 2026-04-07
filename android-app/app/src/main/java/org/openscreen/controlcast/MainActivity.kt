@@ -230,6 +230,7 @@ class MainActivity : ComponentActivity() {
     private val debugCommands = Channel<DebugCommand>(Channel.UNLIMITED)
     private val sharedVideoUris = Channel<Uri>(Channel.UNLIMITED)
     private val videoReadPermissionResults = Channel<Boolean>(Channel.UNLIMITED)
+    private var wifiBindingRegistered = false
 
     fun debugCommandsFlow() = debugCommands.receiveAsFlow()
     fun sharedVideoUrisFlow() = sharedVideoUris.receiveAsFlow()
@@ -305,7 +306,7 @@ class MainActivity : ComponentActivity() {
         // Bind this process to the WiFi network so native UDP sockets
         // are routed correctly.  Without this, sendto() on UDP sockets
         // created by Open Screen's native code fails with EPERM.
-        bindProcessToWifi()
+        refreshWifiBinding("onCreate")
         val testTarget = intent?.getStringExtra("test_target")
         val testFile = intent?.getStringExtra("test_file")
         val testCalibrate = intent?.getBooleanExtra("test_calibrate", false) == true
@@ -333,10 +334,29 @@ class MainActivity : ComponentActivity() {
         enqueueSharedVideoIntent(intent)
     }
 
-    private fun bindProcessToWifi() {
+    fun refreshWifiBinding(reason: String) {
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        // Bind synchronously first.
-        cm.activeNetwork?.let { cm.bindProcessToNetwork(it) }
+        val wifiNetwork = cm.allNetworks.firstOrNull { network ->
+            val caps = cm.getNetworkCapabilities(network)
+            caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        }
+        if (wifiNetwork != null) {
+            cm.bindProcessToNetwork(wifiNetwork)
+            android.util.Log.i(
+                "ControlCast",
+                "refreshWifiBinding reason=$reason boundNetwork=$wifiNetwork",
+            )
+        } else {
+            android.util.Log.w(
+                "ControlCast",
+                "refreshWifiBinding reason=$reason found no active Wi-Fi network",
+            )
+        }
+        if (wifiBindingRegistered) {
+            return
+        }
+        wifiBindingRegistered = true
         // Keep a persistent network request so the binding is maintained
         // even if the network briefly drops and reconnects.
         val request = NetworkRequest.Builder()
@@ -346,6 +366,30 @@ class MainActivity : ComponentActivity() {
         cm.requestNetwork(request, object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: android.net.Network) {
                 cm.bindProcessToNetwork(network)
+                android.util.Log.i(
+                    "ControlCast",
+                    "refreshWifiBinding callback=onAvailable boundNetwork=$network",
+                )
+            }
+
+            override fun onCapabilitiesChanged(
+                network: android.net.Network,
+                networkCapabilities: NetworkCapabilities,
+            ) {
+                if (networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                    cm.bindProcessToNetwork(network)
+                    android.util.Log.i(
+                        "ControlCast",
+                        "refreshWifiBinding callback=onCapabilitiesChanged boundNetwork=$network",
+                    )
+                }
+            }
+
+            override fun onLost(network: android.net.Network) {
+                android.util.Log.w(
+                    "ControlCast",
+                    "refreshWifiBinding callback=onLost lostNetwork=$network",
+                )
             }
         })
     }
@@ -1033,6 +1077,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var lastObservedCastPlaying by remember { mutableStateOf(false) }
     var lastPickerLaunchMode by rememberSaveable { mutableStateOf<VideoPickerMode?>(null) }
     var lastPickerLaunchRealtimeMs by rememberSaveable { mutableLongStateOf(0L) }
+    var lastNoRouteStatus by rememberSaveable { mutableStateOf<String?>(null) }
     val connectionState = connection.state
     val connectedDevice = connection.target
     val isConnected = connectionState == Connection.State.CONNECTED
@@ -1106,6 +1151,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
 
     // Connect to a device and optionally send the current video.
     fun connectToDevice(device: CastDevice) {
+        activity?.refreshWifiBinding("connectToDevice")
         if (!connection.beginConnect(device)) {
             return
         }
@@ -1527,6 +1573,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             when (command) {
                 is DebugCommand.Connect -> {
                     command.timeoutMs?.let { persistConnectTimeoutMs(it) }
+                    activity.refreshWifiBinding("debugConnect")
                     val device = discoveredDevices.firstOrNull { it.target == command.target }
                     if (device != null) {
                         connection.connect(device)
@@ -1556,6 +1603,18 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 is DebugCommand.SetVideoPassthrough -> setVideoPassthroughEnabled(command.enabled)
                 DebugCommand.Print -> printDebugState("intent")
             }
+        }
+    }
+
+    LaunchedEffect(activity, backendStatus) {
+        val currentActivity = activity ?: return@LaunchedEffect
+        if (backendStatus.contains("No route to host")) {
+            if (lastNoRouteStatus != backendStatus) {
+                lastNoRouteStatus = backendStatus
+                currentActivity.refreshWifiBinding("no_route_to_host")
+            }
+        } else {
+            lastNoRouteStatus = null
         }
     }
 
