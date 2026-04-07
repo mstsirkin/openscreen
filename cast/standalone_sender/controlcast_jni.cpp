@@ -98,6 +98,23 @@ ControllerState& State() {
   return state;
 }
 
+bool ComputeEffectivePlayingLocked(const ControllerState& state) {
+  if (!state.connection.connected || state.video_uri.empty() ||
+      !state.desired_playing) {
+    return false;
+  }
+  if (state.connection.cast) {
+    const auto duration = state.connection.cast->GetDuration();
+    if (duration > openscreen::Clock::duration::zero()) {
+      const auto position = state.connection.cast->GetCurrentPosition();
+      if (position >= duration) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 std::string JStringToStdString(JNIEnv* env, jstring value) {
   if (!value) {
     return {};
@@ -968,18 +985,8 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeIsPlaying(
     JNIEnv* env,
     jobject thiz) {
   auto& state = State();
-#ifdef HAVE_OPENSCREEN
-  if (state.connection.cast) {
-    return (state.connection.cast->IsConnected() &&
-            state.connection.cast->IsPlaying())
-               ? JNI_TRUE
-               : JNI_FALSE;
-  }
-  return JNI_FALSE;
-#else
   std::lock_guard<std::mutex> lock(state.mutex);
-  return state.playing ? JNI_TRUE : JNI_FALSE;
-#endif
+  return ComputeEffectivePlayingLocked(state) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jlong JNICALL
@@ -1030,6 +1037,7 @@ Java_org_openscreen_controlcast_NativeBackedBackend_nativeGetStatus(
                               state.connection.cast->GetCurrentPosition())
                               .count();
     }
+    state.playing = ComputeEffectivePlayingLocked(state);
     state.active_mode = state.connection.cast->GetActiveModeString();
     state.debug_state = state.connection.cast->GetDebugStateString();
     UpdateStatusLocked(state);
