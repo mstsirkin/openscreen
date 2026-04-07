@@ -96,6 +96,7 @@ class ControllableFileCastAgent final
   void CreateAndStartSession();
   void StartSender();
   void Shutdown(const std::string& reason = "shutdown");
+  bool HasFreshReceiverMediaStatus() const;
 
   TaskRunner& task_runner_;
   ShutdownCallback shutdown_callback_;

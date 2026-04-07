@@ -24,6 +24,7 @@ constexpr char kJsonKeyPlayerState[] = "playerState";
 constexpr char kJsonKeyIdleReason[] = "idleReason";
 constexpr char kJsonKeyMediaSessionId[] = "mediaSessionId";
 constexpr char kJsonKeyCurrentTime[] = "currentTime";
+constexpr auto kFreshReceiverMediaStatusWindow = std::chrono::seconds(5);
 }  // namespace
 
 ControllableFileCastAgent::ControllableFileCastAgent(
@@ -140,6 +141,9 @@ bool ControllableFileCastAgent::IsConnected() const {
 }
 
 bool ControllableFileCastAgent::IsPlaying() const {
+  if (HasFreshReceiverMediaStatus()) {
+    return last_receiver_player_state_ == "PLAYING";
+  }
   if (sender_) {
     return sender_->is_playing();
   }
@@ -193,6 +197,14 @@ void ControllableFileCastAgent::SetBrightness(int brightness) {
   if (sender_) {
     sender_->SetBrightness(brightness);
   }
+}
+
+bool ControllableFileCastAgent::HasFreshReceiverMediaStatus() const {
+  if (last_receiver_media_status_at_ == Clock::time_point{}) {
+    return false;
+  }
+  return Clock::now() - last_receiver_media_status_at_ <=
+         kFreshReceiverMediaStatusWindow;
 }
 
 void ControllableFileCastAgent::OnConnected(SenderSocketFactory* factory,
