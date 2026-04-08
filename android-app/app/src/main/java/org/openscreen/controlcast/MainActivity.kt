@@ -75,6 +75,7 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
+import androidx.media3.common.PlaybackException
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.CoroutineScope
@@ -1456,7 +1457,31 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     }
 
     DisposableEffect(exoPlayer) {
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                android.util.Log.i(
+                    "ControlCast",
+                    "exo onPlaybackStateChanged state=$playbackState playWhenReady=${exoPlayer.playWhenReady} isPlaying=${exoPlayer.isPlaying} pos=${exoPlayer.currentPosition.coerceAtLeast(0L)} uri=${exoPlayer.currentMediaItem?.localConfiguration?.uri}",
+                )
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                android.util.Log.i(
+                    "ControlCast",
+                    "exo onIsPlayingChanged isPlaying=$isPlaying playWhenReady=${exoPlayer.playWhenReady} state=${exoPlayer.playbackState} pos=${exoPlayer.currentPosition.coerceAtLeast(0L)} uri=${exoPlayer.currentMediaItem?.localConfiguration?.uri}",
+                )
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                android.util.Log.e(
+                    "ControlCast",
+                    "exo onPlayerError code=${error.errorCode} name=${error.errorCodeName} message=${error.message} cause=${error.cause} uri=${exoPlayer.currentMediaItem?.localConfiguration?.uri}",
+                )
+            }
+        }
+        exoPlayer.addListener(listener)
         onDispose {
+            exoPlayer.removeListener(listener)
             // Save to activity fields — these survive between
             // onSaveInstanceState and recreation, unlike rememberSaveable
             // which is captured before onDispose runs.
