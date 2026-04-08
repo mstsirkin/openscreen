@@ -58,6 +58,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -1103,6 +1104,21 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         connection.setConnectTimeoutMs(connectTimeoutMs)
     }
 
+    val currentConnectionState = rememberUpdatedState(connectionState)
+    val currentConnectedDevice = rememberUpdatedState(connectedDevice)
+    val currentBackendStatus = rememberUpdatedState(backendStatus)
+    val currentSelectedUri = rememberUpdatedState(selectedUri)
+    val currentLocalMirrorEnabled = rememberUpdatedState(localMirrorEnabled)
+    val currentSliderDragging = rememberUpdatedState(sliderDragging)
+    val currentRestored = rememberUpdatedState(restored)
+    val currentReconnectResumeArmed = rememberUpdatedState(reconnectResumeArmed)
+    val currentReconnectResumeUri = rememberUpdatedState(reconnectResumeUri)
+    val currentPendingCastPlayConfirmation = rememberUpdatedState(pendingCastPlayConfirmation)
+    val currentPendingCastPlayBaselineMs = rememberUpdatedState(pendingCastPlayBaselineMs)
+    val currentLastObservedCastPlaying = rememberUpdatedState(lastObservedCastPlaying)
+    val currentLastObservedCastPosForPlayConfirm = rememberUpdatedState(lastObservedCastPosForPlayConfirm)
+    val currentLatestSeekRealtimeMs = rememberUpdatedState(latestSeekRealtimeMs)
+
     LaunchedEffect(playoutDelayMs) {
         backend.setPlayoutDelay(playoutDelayMs)
     }
@@ -1702,22 +1718,22 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         android.util.Log.i("ControlCast", "poll loop started")
         while (true) {
             try {
-                val castConnected = connectionState == Connection.State.CONNECTED
+                val castConnected = currentConnectionState.value == Connection.State.CONNECTED
                 val liveCastConnected =
                     backend.isConnected() &&
-                        !backend.status.value.startsWith("Not connected.") &&
-                        !backend.status.value.contains("| no video selected")
+                        !currentBackendStatus.value.startsWith("Not connected.") &&
+                        !currentBackendStatus.value.contains("| no video selected")
                 val castPos = connection.getCastPositionMs().coerceAtLeast(0L)
                 val castDur = connection.getCastDurationMs().coerceAtLeast(0L)
                 val castPlaying = connection.isCastPlaying()
                 val exoPos = exoPlayer.currentPosition.coerceAtLeast(0L)
                 val exoHasMedia = exoPlayer.mediaItemCount > 0
                 val inferredCastPlaying =
-                    pendingCastPlayConfirmation &&
-                        castPos > pendingCastPlayBaselineMs + 250L &&
-                        castPos > lastObservedCastPosForPlayConfirm
+                    currentPendingCastPlayConfirmation.value &&
+                        castPos > currentPendingCastPlayBaselineMs.value + 250L &&
+                        castPos > currentLastObservedCastPosForPlayConfirm.value
                 val effectiveCastPlaying = castPlaying || inferredCastPlaying
-                if (connectedDevice != null && !liveCastConnected && exoHasMedia) {
+                if (currentConnectedDevice.value != null && !liveCastConnected && exoHasMedia) {
                     exoPlayer.pause()
                 }
                 durationMs = if (castConnected && castDur > 0L) {
@@ -1727,20 +1743,21 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 } else {
                     castDur
                 }
-                if (castConnected && exoHasMedia && restored) {
-                    if (localMirrorEnabled && !exoPlayer.isPlaying && castPos > 0L) {
+                if (castConnected && exoHasMedia && currentRestored.value) {
+                    if (currentLocalMirrorEnabled.value && !exoPlayer.isPlaying && castPos > 0L) {
                         android.util.Log.i(
                             "ControlCast",
-                            "poll local-idle castConnected=$castConnected liveCastConnected=$liveCastConnected restored=$restored exoHasMedia=$exoHasMedia castPlaying=$castPlaying inferredCastPlaying=$inferredCastPlaying effectiveCastPlaying=$effectiveCastPlaying playWhenReady=${exoPlayer.playWhenReady} exoState=${exoPlayer.playbackState} exoPos=$exoPos castPos=$castPos selectedUri=$selectedUri",
+                            "poll local-idle castConnected=$castConnected liveCastConnected=$liveCastConnected restored=${currentRestored.value} exoHasMedia=$exoHasMedia castPlaying=$castPlaying inferredCastPlaying=$inferredCastPlaying effectiveCastPlaying=$effectiveCastPlaying playWhenReady=${exoPlayer.playWhenReady} exoState=${exoPlayer.playbackState} exoPos=$exoPos castPos=$castPos selectedUri=${currentSelectedUri.value}",
                         )
                     }
-                    val castStartedThisTick = effectiveCastPlaying && !lastObservedCastPlaying
+                    val castStartedThisTick =
+                        effectiveCastPlaying && !currentLastObservedCastPlaying.value
                     if (castStartedThisTick && castPos > 0L) {
                         exoPlayer.seekTo(castPos)
                     }
                     if (effectiveCastPlaying &&
-                        reconnectResumeArmed &&
-                        reconnectResumeUri == selectedUri?.toString()) {
+                        currentReconnectResumeArmed.value &&
+                        currentReconnectResumeUri.value == currentSelectedUri.value?.toString()) {
                         reconnectResumeArmed = false
                     }
                     if (effectiveCastPlaying) {
@@ -1748,14 +1765,14 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                         pendingCastPlayBaselineMs = -1L
                     }
                     val driftMs = kotlin.math.abs(exoPos - castPos)
-                    val recentSeek = latestSeekRealtimeMs > 0L &&
-                        android.os.SystemClock.elapsedRealtime() - latestSeekRealtimeMs < 2500L
+                    val recentSeek = currentLatestSeekRealtimeMs.value > 0L &&
+                        android.os.SystemClock.elapsedRealtime() - currentLatestSeekRealtimeMs.value < 2500L
                     val syncThresholdMs = if (recentSeek) 150L else 300L
-                    if (!sliderDragging && castPos > 0L && driftMs > syncThresholdMs) {
+                    if (!currentSliderDragging.value && castPos > 0L && driftMs > syncThresholdMs) {
                         exoPlayer.seekTo(castPos)
                     }
                     if (effectiveCastPlaying) {
-                        if (localMirrorEnabled) {
+                        if (currentLocalMirrorEnabled.value) {
                             exoPlayer.play()
                         } else {
                             exoPlayer.pause()
@@ -1766,7 +1783,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 }
                 lastObservedCastPlaying = effectiveCastPlaying
                 lastObservedCastPosForPlayConfirm = castPos
-                if (!sliderDragging && restored) {
+                if (!currentSliderDragging.value && currentRestored.value) {
                     positionMs = if (castConnected && castPos > 0L) {
                         castPos
                     } else if (exoHasMedia) {
