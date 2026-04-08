@@ -1710,6 +1710,12 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 castDur
             }
             if (castConnected && exoHasMedia && restored) {
+                if (localMirrorEnabled && !exoPlayer.isPlaying && castPos > 0L) {
+                    android.util.Log.i(
+                        "ControlCast",
+                        "poll local-idle castConnected=$castConnected liveCastConnected=$liveCastConnected restored=$restored exoHasMedia=$exoHasMedia castPlaying=$castPlaying inferredCastPlaying=$inferredCastPlaying effectiveCastPlaying=$effectiveCastPlaying playWhenReady=${exoPlayer.playWhenReady} exoState=${exoPlayer.playbackState} exoPos=$exoPos castPos=$castPos selectedUri=$selectedUri",
+                    )
+                }
                 val castStartedThisTick = effectiveCastPlaying && !lastObservedCastPlaying
                 if (castStartedThisTick && castPos > 0L) {
                     exoPlayer.seekTo(castPos)
