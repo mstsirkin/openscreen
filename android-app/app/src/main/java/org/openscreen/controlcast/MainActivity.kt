@@ -1314,6 +1314,15 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         val now = android.os.SystemClock.elapsedRealtime()
         val liveConnectionState = connection.state
         val liveConnectedDevice = connection.target
+        val liveCastConnected =
+            backend.isConnected() &&
+                !backend.status.value.startsWith("Not connected.") &&
+                !backend.status.value.contains("| no video selected")
+        val exoHasMedia = exoPlayer.mediaItemCount > 0
+        val exoState = exoPlayer.playbackState
+        val exoPlayWhenReady = exoPlayer.playWhenReady
+        val pendingPlayConfirm = pendingCastPlayConfirmation
+        val pendingPlayBaseline = pendingCastPlayBaselineMs
         android.util.Log.i(
             "ControlCast",
             buildString {
@@ -1322,11 +1331,18 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 append(" target=").append(liveConnectedDevice?.target ?: "")
                 append(" selectedUri=").append(selectedUri ?: "")
                 append(" isPlaying=").append(isPlaying)
+                append(" restored=").append(restored)
+                append(" exoHasMedia=").append(exoHasMedia)
+                append(" exoState=").append(exoState)
+                append(" exoPlayWhenReady=").append(exoPlayWhenReady)
                 append(" exoPos=").append(exoPos)
                 append(" exoDur=").append(exoPlayer.duration.coerceAtLeast(0L))
                 append(" castPos=").append(castPos)
                 append(" castDur=").append(connection.getCastDurationMs())
                 append(" castPlaying=").append(connection.isCastPlaying())
+                append(" liveCastConnected=").append(liveCastConnected)
+                append(" pendingCastPlayConfirmation=").append(pendingPlayConfirm)
+                append(" pendingCastPlayBaselineMs=").append(pendingPlayBaseline)
                 append(" exoMinusCast=").append(exoPos - castPos)
                 append(" latestSeekTarget=").append(latestSeekTargetMs)
                 append(" latestSeekAgeMs=")
