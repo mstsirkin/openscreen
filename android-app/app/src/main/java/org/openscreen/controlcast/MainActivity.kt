@@ -311,8 +311,6 @@ class MainActivity : ComponentActivity() {
         val testFile = intent?.getStringExtra("test_file")
         val testCalibrate = intent?.getBooleanExtra("test_calibrate", false) == true
         val testFullscreen = intent?.getBooleanExtra("test_fullscreen", false) == true
-        // Handle shared video from Gallery or other apps
-        val sharedUri = extractSharedVideoUri(intent)
         enableEdgeToEdge()
         setContent {
             MaterialTheme {
@@ -320,11 +318,12 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = Color(0xFF101317),
                 ) {
-                    ControlCastApp(testTarget, testFile, testCalibrate, sharedUri, testFullscreen)
+                    ControlCastApp(testTarget, testFile, testCalibrate, testFullscreen)
                 }
             }
         }
         enqueueDebugIntent(intent)
+        enqueueSharedVideoIntent(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -967,7 +966,7 @@ private fun setAutoReconnect(context: Context, target: String, enabled: Boolean)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ControlCastApp(testTarget: String? = null, testFile: String? = null, testCalibrate: Boolean = false, sharedUri: Uri? = null, testFullscreen: Boolean = false) {
+private fun ControlCastApp(testTarget: String? = null, testFile: String? = null, testCalibrate: Boolean = false, testFullscreen: Boolean = false) {
     val context = LocalContext.current
     val backend = remember { NativeBackedBackend() }
     val connection = remember(backend) { Connection(backend) }
@@ -1027,7 +1026,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     }
     val prefs = remember { context.getSharedPreferences("cast_ui", Context.MODE_PRIVATE) }
 
-    var selectedUri by rememberSaveable { mutableStateOf<Uri?>(null) }
+    var selectedUri by remember { mutableStateOf<Uri?>(null) }
     var localMirrorEnabled by rememberSaveable { mutableStateOf(true) }
     var localSoundEnabled by rememberSaveable { mutableStateOf(false) }
     var hwEncodeEnabled by rememberSaveable { mutableStateOf(true) }
@@ -1062,25 +1061,25 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     var autoReconnectTargets by remember {
         mutableStateOf(getAutoReconnectTargets(context))
     }
-    var castOpenedUri by rememberSaveable { mutableStateOf<String?>(null) }
-    var castOpenRestartPending by rememberSaveable { mutableStateOf(false) }
-    var lastCastOpenRequestRealtimeMs by rememberSaveable { mutableLongStateOf(0L) }
-    var reconnectResumeArmed by rememberSaveable { mutableStateOf(false) }
-    var reconnectResumeUri by rememberSaveable { mutableStateOf<String?>(null) }
-    var pendingSharedUri by rememberSaveable { mutableStateOf<Uri?>(null) }
-    var pendingExternalPlayUri by rememberSaveable { mutableStateOf<String?>(null) }
-    var latestSeekTargetMs by rememberSaveable { mutableLongStateOf(-1L) }
-    var latestSeekRealtimeMs by rememberSaveable { mutableLongStateOf(0L) }
+    var castOpenedUri by remember { mutableStateOf<String?>(null) }
+    var castOpenRestartPending by remember { mutableStateOf(false) }
+    var lastCastOpenRequestRealtimeMs by remember { mutableLongStateOf(0L) }
+    var reconnectResumeArmed by remember { mutableStateOf(false) }
+    var reconnectResumeUri by remember { mutableStateOf<String?>(null) }
+    var pendingSharedUri by remember { mutableStateOf<Uri?>(null) }
+    var pendingExternalPlayUri by remember { mutableStateOf<String?>(null) }
+    var latestSeekTargetMs by remember { mutableLongStateOf(-1L) }
+    var latestSeekRealtimeMs by remember { mutableLongStateOf(0L) }
     var lastCastSeekDispatchRealtimeMs by remember { mutableLongStateOf(0L) }
     var pendingCastSeekTargetMs by remember { mutableLongStateOf(-1L) }
     var pendingCastSeekJob by remember { mutableStateOf<Job?>(null) }
     var lastObservedCastPlaying by remember { mutableStateOf(false) }
     var lastObservedCastPosForPlayConfirm by remember { mutableLongStateOf(0L) }
-    var pendingCastPlayConfirmation by rememberSaveable { mutableStateOf(false) }
-    var pendingCastPlayBaselineMs by rememberSaveable { mutableLongStateOf(-1L) }
-    var lastPickerLaunchMode by rememberSaveable { mutableStateOf<VideoPickerMode?>(null) }
-    var lastPickerLaunchRealtimeMs by rememberSaveable { mutableLongStateOf(0L) }
-    var lastNoRouteStatus by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingCastPlayConfirmation by remember { mutableStateOf(false) }
+    var pendingCastPlayBaselineMs by remember { mutableLongStateOf(-1L) }
+    var lastPickerLaunchMode by remember { mutableStateOf<VideoPickerMode?>(null) }
+    var lastPickerLaunchRealtimeMs by remember { mutableLongStateOf(0L) }
+    var lastNoRouteStatus by remember { mutableStateOf<String?>(null) }
     val connectionState = connection.state
     val connectedDevice = connection.target
     val isConnected = connectionState == Connection.State.CONNECTED
@@ -1495,11 +1494,6 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         onDispose {
             connection.dispose()
         }
-    }
-
-    // Auto-load video shared from Gallery or other apps
-    LaunchedEffect(sharedUri) {
-        sharedUri?.let { loadIncomingSharedVideo(it) }
     }
 
     LaunchedEffect(activity) {
