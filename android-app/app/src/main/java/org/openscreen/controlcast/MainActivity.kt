@@ -1148,6 +1148,13 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
             "ControlCast",
             "openSelectedVideoOnCast uri=$uri startPlaying=$startPlaying startPositionMs=$startPositionMs castOpenedUri=$castOpenedUri connectionState=$connectionState",
         )
+        if (startPlaying) {
+            pendingCastPlayConfirmation = true
+            pendingCastPlayBaselineMs = connection.getCastPositionMs().coerceAtLeast(0L)
+        } else {
+            pendingCastPlayConfirmation = false
+            pendingCastPlayBaselineMs = -1L
+        }
         pushSelectedVideoToCastSession(uri, startPlaying, startPositionMs)
     }
 
@@ -1415,10 +1422,12 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         val mediaItem = MediaItem.fromUri(uri)
         exoPlayer.setMediaItem(mediaItem)
         exoPlayer.prepare()
-        // Intent-driven opens must not let local preview run ahead of Cast.
-        // Keep local paused and wait for the Cast session to become authoritative.
+        // Shared opens must not let local preview run ahead of the TV. Keep it
+        // paused until the Cast session becomes authoritative.
         exoPlayer.pause()
         isPlaying = false
+        pendingCastPlayConfirmation = false
+        pendingCastPlayBaselineMs = -1L
         if (connectionState == Connection.State.CONNECTED) {
             openSelectedVideoOnCast(uri, shouldStartPlaying, startPositionMs = 0L)
             pendingExternalPlayUri = null
