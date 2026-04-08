@@ -76,7 +76,6 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
-import androidx.media3.common.PlaybackException
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.CoroutineScope
@@ -1330,15 +1329,6 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
         val now = android.os.SystemClock.elapsedRealtime()
         val liveConnectionState = connection.state
         val liveConnectedDevice = connection.target
-        val liveCastConnected =
-            backend.isConnected() &&
-                !backend.status.value.startsWith("Not connected.") &&
-                !backend.status.value.contains("| no video selected")
-        val exoHasMedia = exoPlayer.mediaItemCount > 0
-        val exoState = exoPlayer.playbackState
-        val exoPlayWhenReady = exoPlayer.playWhenReady
-        val pendingPlayConfirm = pendingCastPlayConfirmation
-        val pendingPlayBaseline = pendingCastPlayBaselineMs
         android.util.Log.i(
             "ControlCast",
             buildString {
@@ -1347,18 +1337,11 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
                 append(" target=").append(liveConnectedDevice?.target ?: "")
                 append(" selectedUri=").append(selectedUri ?: "")
                 append(" isPlaying=").append(isPlaying)
-                append(" restored=").append(restored)
-                append(" exoHasMedia=").append(exoHasMedia)
-                append(" exoState=").append(exoState)
-                append(" exoPlayWhenReady=").append(exoPlayWhenReady)
                 append(" exoPos=").append(exoPos)
                 append(" exoDur=").append(exoPlayer.duration.coerceAtLeast(0L))
                 append(" castPos=").append(castPos)
                 append(" castDur=").append(connection.getCastDurationMs())
                 append(" castPlaying=").append(connection.isCastPlaying())
-                append(" liveCastConnected=").append(liveCastConnected)
-                append(" pendingCastPlayConfirmation=").append(pendingPlayConfirm)
-                append(" pendingCastPlayBaselineMs=").append(pendingPlayBaseline)
                 append(" exoMinusCast=").append(exoPos - castPos)
                 append(" latestSeekTarget=").append(latestSeekTargetMs)
                 append(" latestSeekAgeMs=")
@@ -1489,31 +1472,7 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     }
 
     DisposableEffect(exoPlayer) {
-        val listener = object : Player.Listener {
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                android.util.Log.i(
-                    "ControlCast",
-                    "exo onPlaybackStateChanged state=$playbackState playWhenReady=${exoPlayer.playWhenReady} isPlaying=${exoPlayer.isPlaying} pos=${exoPlayer.currentPosition.coerceAtLeast(0L)} uri=${exoPlayer.currentMediaItem?.localConfiguration?.uri}",
-                )
-            }
-
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                android.util.Log.i(
-                    "ControlCast",
-                    "exo onIsPlayingChanged isPlaying=$isPlaying playWhenReady=${exoPlayer.playWhenReady} state=${exoPlayer.playbackState} pos=${exoPlayer.currentPosition.coerceAtLeast(0L)} uri=${exoPlayer.currentMediaItem?.localConfiguration?.uri}",
-                )
-            }
-
-            override fun onPlayerError(error: PlaybackException) {
-                android.util.Log.e(
-                    "ControlCast",
-                    "exo onPlayerError code=${error.errorCode} name=${error.errorCodeName} message=${error.message} cause=${error.cause} uri=${exoPlayer.currentMediaItem?.localConfiguration?.uri}",
-                )
-            }
-        }
-        exoPlayer.addListener(listener)
         onDispose {
-            exoPlayer.removeListener(listener)
             // Save to activity fields — these survive between
             // onSaveInstanceState and recreation, unlike rememberSaveable
             // which is captured before onDispose runs.
@@ -1715,96 +1674,84 @@ private fun ControlCastApp(testTarget: String? = null, testFile: String? = null,
     }
 
     LaunchedEffect(exoPlayer) {
-        android.util.Log.i("ControlCast", "poll loop started")
         while (true) {
-            try {
-                val castConnected = currentConnectionState.value == Connection.State.CONNECTED
-                val liveCastConnected =
-                    backend.isConnected() &&
-                        !currentBackendStatus.value.startsWith("Not connected.") &&
-                        !currentBackendStatus.value.contains("| no video selected")
-                val castPos = connection.getCastPositionMs().coerceAtLeast(0L)
-                val castDur = connection.getCastDurationMs().coerceAtLeast(0L)
-                val castPlaying = connection.isCastPlaying()
-                val exoPos = exoPlayer.currentPosition.coerceAtLeast(0L)
-                val exoHasMedia = exoPlayer.mediaItemCount > 0
-                val inferredCastPlaying =
-                    currentPendingCastPlayConfirmation.value &&
-                        castPos > currentPendingCastPlayBaselineMs.value + 250L &&
-                        castPos > currentLastObservedCastPosForPlayConfirm.value
-                val effectiveCastPlaying = castPlaying || inferredCastPlaying
-                if (currentConnectedDevice.value != null && !liveCastConnected && exoHasMedia) {
-                    exoPlayer.pause()
+            val castConnected = currentConnectionState.value == Connection.State.CONNECTED
+            val liveCastConnected =
+                backend.isConnected() &&
+                    !currentBackendStatus.value.startsWith("Not connected.") &&
+                    !currentBackendStatus.value.contains("| no video selected")
+            val castPos = connection.getCastPositionMs().coerceAtLeast(0L)
+            val castDur = connection.getCastDurationMs().coerceAtLeast(0L)
+            val castPlaying = connection.isCastPlaying()
+            val exoPos = exoPlayer.currentPosition.coerceAtLeast(0L)
+            val exoHasMedia = exoPlayer.mediaItemCount > 0
+            val inferredCastPlaying =
+                currentPendingCastPlayConfirmation.value &&
+                    castPos > currentPendingCastPlayBaselineMs.value + 250L &&
+                    castPos > currentLastObservedCastPosForPlayConfirm.value
+            val effectiveCastPlaying = castPlaying || inferredCastPlaying
+            if (currentConnectedDevice.value != null && !liveCastConnected && exoHasMedia) {
+                exoPlayer.pause()
+            }
+            durationMs = if (castConnected && castDur > 0L) {
+                castDur
+            } else if (exoHasMedia) {
+                exoPlayer.duration.coerceAtLeast(0L)
+            } else {
+                castDur
+            }
+            if (castConnected && exoHasMedia && currentRestored.value) {
+                val castStartedThisTick =
+                    effectiveCastPlaying && !currentLastObservedCastPlaying.value
+                if (castStartedThisTick && castPos > 0L) {
+                    exoPlayer.seekTo(castPos)
                 }
-                durationMs = if (castConnected && castDur > 0L) {
-                    castDur
-                } else if (exoHasMedia) {
-                    exoPlayer.duration.coerceAtLeast(0L)
-                } else {
-                    castDur
+                if (effectiveCastPlaying &&
+                    currentReconnectResumeArmed.value &&
+                    currentReconnectResumeUri.value == currentSelectedUri.value?.toString()) {
+                    reconnectResumeArmed = false
                 }
-                if (castConnected && exoHasMedia && currentRestored.value) {
-                    if (currentLocalMirrorEnabled.value && !exoPlayer.isPlaying && castPos > 0L) {
-                        android.util.Log.i(
-                            "ControlCast",
-                            "poll local-idle castConnected=$castConnected liveCastConnected=$liveCastConnected restored=${currentRestored.value} exoHasMedia=$exoHasMedia castPlaying=$castPlaying inferredCastPlaying=$inferredCastPlaying effectiveCastPlaying=$effectiveCastPlaying playWhenReady=${exoPlayer.playWhenReady} exoState=${exoPlayer.playbackState} exoPos=$exoPos castPos=$castPos selectedUri=${currentSelectedUri.value}",
-                        )
-                    }
-                    val castStartedThisTick =
-                        effectiveCastPlaying && !currentLastObservedCastPlaying.value
-                    if (castStartedThisTick && castPos > 0L) {
-                        exoPlayer.seekTo(castPos)
-                    }
-                    if (effectiveCastPlaying &&
-                        currentReconnectResumeArmed.value &&
-                        currentReconnectResumeUri.value == currentSelectedUri.value?.toString()) {
-                        reconnectResumeArmed = false
-                    }
-                    if (effectiveCastPlaying) {
-                        pendingCastPlayConfirmation = false
-                        pendingCastPlayBaselineMs = -1L
-                    }
-                    val driftMs = kotlin.math.abs(exoPos - castPos)
-                    val recentSeek = currentLatestSeekRealtimeMs.value > 0L &&
-                        android.os.SystemClock.elapsedRealtime() - currentLatestSeekRealtimeMs.value < 2500L
-                    val syncThresholdMs = if (recentSeek) 150L else 300L
-                    if (!currentSliderDragging.value && castPos > 0L && driftMs > syncThresholdMs) {
-                        exoPlayer.seekTo(castPos)
-                    }
-                    if (effectiveCastPlaying) {
-                        if (currentLocalMirrorEnabled.value) {
-                            exoPlayer.play()
-                        } else {
-                            exoPlayer.pause()
-                        }
+                if (effectiveCastPlaying) {
+                    pendingCastPlayConfirmation = false
+                    pendingCastPlayBaselineMs = -1L
+                }
+                val driftMs = kotlin.math.abs(exoPos - castPos)
+                val recentSeek = currentLatestSeekRealtimeMs.value > 0L &&
+                    android.os.SystemClock.elapsedRealtime() - currentLatestSeekRealtimeMs.value < 2500L
+                val syncThresholdMs = if (recentSeek) 150L else 300L
+                if (!currentSliderDragging.value && castPos > 0L && driftMs > syncThresholdMs) {
+                    exoPlayer.seekTo(castPos)
+                }
+                if (effectiveCastPlaying) {
+                    if (currentLocalMirrorEnabled.value) {
+                        exoPlayer.play()
                     } else {
                         exoPlayer.pause()
                     }
-                }
-                lastObservedCastPlaying = effectiveCastPlaying
-                lastObservedCastPosForPlayConfirm = castPos
-                if (!currentSliderDragging.value && currentRestored.value) {
-                    positionMs = if (castConnected && castPos > 0L) {
-                        castPos
-                    } else if (exoHasMedia) {
-                        exoPlayer.currentPosition.coerceAtLeast(0L)
-                    } else {
-                        castPos
-                    }
-                    sliderValue = if (durationMs > 0L) {
-                        positionMs.toFloat() / durationMs.toFloat()
-                    } else {
-                        0f
-                    }
-                }
-                isPlaying = if (castConnected) {
-                    liveCastConnected && effectiveCastPlaying
                 } else {
-                    if (exoHasMedia) exoPlayer.isPlaying else effectiveCastPlaying
+                    exoPlayer.pause()
                 }
-            } catch (t: Throwable) {
-                android.util.Log.e("ControlCast", "poll loop failed", t)
-                throw t
+            }
+            lastObservedCastPlaying = effectiveCastPlaying
+            lastObservedCastPosForPlayConfirm = castPos
+            if (!currentSliderDragging.value && currentRestored.value) {
+                positionMs = if (castConnected && castPos > 0L) {
+                    castPos
+                } else if (exoHasMedia) {
+                    exoPlayer.currentPosition.coerceAtLeast(0L)
+                } else {
+                    castPos
+                }
+                sliderValue = if (durationMs > 0L) {
+                    positionMs.toFloat() / durationMs.toFloat()
+                } else {
+                    0f
+                }
+            }
+            isPlaying = if (castConnected) {
+                liveCastConnected && effectiveCastPlaying
+            } else {
+                if (exoHasMedia) exoPlayer.isPlaying else effectiveCastPlaying
             }
             delay(200)
         }
